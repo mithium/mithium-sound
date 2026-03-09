@@ -1,0 +1,23 @@
+appId: com.mithium.sound
+productName: Mithium Sound
+directories:
+  output: dist
+files:
+  - src/**/*
+  - package.json
+asarUnpack:
+  - node_modules/sql.js/dist/**
+  - node_modules/@snazzah/davey-win32-x64-msvc/**
+extraResources:
+  - from: bin/win/
+    to: bin
+    filter:
+      - "**/*"
+  - from: build/icon.png
+    to: icon.png
+win:
+  icon: build/icon.ico
+  target:
+    - target: zip
+      arch: x64
+  signAndEditExecutable: false

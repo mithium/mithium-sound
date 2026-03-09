@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>Mithium Sound</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Top Bar -->
+  <header id="topbar">
+    <div class="topbar-left">
+      <h1>Mithium Sound</h1>
+      <span id="bot-status" class="status-dot offline" title="Disconnected"></span>
+      <span id="bot-status-text">Disconnected</span>
+    </div>
+    <div class="topbar-right">
+      <select id="guild-select" disabled>
+        <option value="">Select Server</option>
+      </select>
+      <select id="channel-select" disabled>
+        <option value="">Select Channel</option>
+      </select>
+      <button id="join-btn" disabled>Join</button>
+      <button id="leave-btn" class="hidden">Leave</button>
+    </div>
+  </header>
+
+  <!-- Tabs -->
+  <nav id="tabs">
+    <button class="tab active" data-tab="sounds">Soundboard</button>
+    <button class="tab" data-tab="youtube">YouTube</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </nav>
+
+  <!-- Soundboard Tab -->
+  <section id="tab-sounds" class="tab-content active">
+    <div class="toolbar">
+      <button id="import-btn">Import Sound</button>
+      <div class="volume-control">
+        <label for="volume-slider">Vol</label>
+        <input type="range" id="volume-slider" min="0" max="150" value="100">
+        <span id="volume-value">100%</span>
+      </div>
+    </div>
+    <div id="sound-grid" class="sound-grid">
+      <p class="empty-message">No sounds yet. Import some audio files or extract from YouTube.</p>
+    </div>
+  </section>
+
+  <!-- YouTube Tab -->
+  <section id="tab-youtube" class="tab-content">
+    <div class="yt-form">
+      <div class="form-group">
+        <label for="yt-url">YouTube URL</label>
+        <input type="text" id="yt-url" placeholder="https://youtube.com/watch?v=...">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="yt-start">Start Time</label>
+          <input type="text" id="yt-start" placeholder="0:00">
+        </div>
+        <div class="form-group">
+          <label for="yt-end">End Time</label>
+          <input type="text" id="yt-end" placeholder="0:30">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="yt-name">Clip Name</label>
+        <input type="text" id="yt-name" placeholder="My Clip">
+      </div>
+      <button id="yt-extract-btn">Extract Clip</button>
+      <div id="yt-progress" class="hidden">
+        <div class="progress-bar">
+          <div id="yt-progress-fill" class="progress-fill"></div>
+        </div>
+        <span id="yt-progress-text">0%</span>
+      </div>
+      <p id="yt-error" class="error-text hidden"></p>
+    </div>
+  </section>
+
+  <!-- Settings Tab -->
+  <section id="tab-settings" class="tab-content">
+    <div class="settings-form">
+      <details class="setup-guide">
+        <summary>How to create a Discord bot</summary>
+        <ol>
+          <li>Go to the <a id="link-discord-dev">Discord Developer Portal</a> (discord.com/developers/applications)</li>
+          <li>Click <strong>New Application</strong>, give it a name, and click Create</li>
+          <li>Go to the <strong>Bot</strong> tab on the left sidebar</li>
+          <li>Your bot token is shown once after creation — click <strong>Copy</strong> to copy it and paste it below. If you missed it, click <strong>Reset Token</strong> to generate a new one</li>
+          <li>Scroll down and enable <strong>Privileged Gateway Intents</strong>:
+            <ul>
+              <li>SERVER MEMBERS INTENT</li>
+              <li>MESSAGE CONTENT INTENT</li>
+            </ul>
+          </li>
+          <li>Go to <strong>OAuth2 &gt; URL Generator</strong> on the left sidebar</li>
+          <li>Under <strong>Scopes</strong>, check <code>bot</code></li>
+          <li>Under <strong>Bot Permissions</strong>, check <code>Connect</code> and <code>Speak</code></li>
+          <li>Copy the generated URL at the bottom and open it in your browser to invite the bot to your server</li>
+        </ol>
+      </details>
+
+      <div class="form-group">
+        <label for="setting-token">Bot Token</label>
+        <input type="password" id="setting-token" placeholder="Discord bot token">
+        <div class="token-actions">
+          <button id="token-login-btn">Login</button>
+          <button id="token-logout-btn" class="hidden">Logout</button>
+        </div>
+      </div>
+      <details class="setup-guide">
+        <summary>Advanced: Override bundled tools</summary>
+        <p style="margin: 8px 0; color: var(--text-muted);">yt-dlp and FFmpeg are bundled with the app. Only change these if you want to use a different version.</p>
+        <div class="form-group">
+          <label for="setting-ytdlp">yt-dlp Path</label>
+          <input type="text" id="setting-ytdlp" placeholder="(bundled)">
+        </div>
+        <div class="form-group">
+          <label for="setting-ffmpeg">FFmpeg Path</label>
+          <input type="text" id="setting-ffmpeg" placeholder="(bundled)">
+        </div>
+      </details>
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="setting-autoconnect"> Auto-connect on login
+        </label>
+      </div>
+      <button id="settings-save-btn">Save Settings</button>
+      <p id="settings-status" class="hidden"></p>
+    </div>
+  </section>
+
+  <!-- Context Menu -->
+  <div id="context-menu" class="context-menu hidden">
+    <button data-action="rename">Rename</button>
+    <button data-action="delete">Delete</button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
