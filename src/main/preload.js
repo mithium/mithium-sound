@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // YouTube
   youtubeExtract: (opts) => ipcRenderer.invoke('youtube:extract', opts),
+  youtubeProbeDuration: (url) => ipcRenderer.invoke('youtube:probeDuration', url),
 
   // Settings
   settingsGet: () => ipcRenderer.invoke('settings:get'),

@@ -1,5 +1,6 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const { isYoutubeUrl } = require('../renderer/timecode');
 
 function parseTimestamp(ts) {
   const parts = ts.split(':').map(Number);
@@ -102,4 +103,119 @@ async function extractClip({ url, start, end, outputPath, ytdlpPath = 'yt-dlp', 
   throw new Error(`yt-dlp exited with code 1: ${retry.stderr.slice(-500)}`);
 }
 
-module.exports = { extractClip, validateTimestamps };
+function parseDurationOutput(stdout) {
+  const lines = String(stdout || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const seconds = Number(lines[i]);
+    if (Number.isFinite(seconds) && seconds > 0) return seconds;
+  }
+  return null;
+}
+
+let probeSerial = 0;
+let activeProbe = null;
+
+function runYtdlpCapture(ytdlpPath, args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ytdlpPath, args, { windowsHide: true });
+    activeProbe = proc;
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { proc.kill(); } catch { /* already gone */ }
+    }, timeoutMs);
+
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (activeProbe === proc) activeProbe = null;
+      fn(value);
+    };
+
+    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+    proc.on('error', (err) => {
+      if (err.code === 'ENOENT') {
+        finish(reject, new Error(`yt-dlp not found at "${ytdlpPath}". Install it or set the path in settings.`));
+      } else {
+        finish(reject, err);
+      }
+    });
+    proc.on('close', (code, signal) => {
+      finish(resolve, { code, signal, stdout, stderr, timedOut });
+    });
+  });
+}
+
+function durationArgs(url, cookiesBrowser) {
+  const args = ['--no-playlist', '--no-warnings', '--skip-download', '--print', 'duration'];
+  if (cookiesBrowser) args.push('--cookies-from-browser', cookiesBrowser);
+  args.push(url);
+  return args;
+}
+
+async function probeDuration({ url, ytdlpPath = 'yt-dlp', timeoutMs = 25000 }) {
+  if (typeof url !== 'string' || !url.trim()) {
+    throw new Error('Missing YouTube URL');
+  }
+  if (!isYoutubeUrl(url)) {
+    throw new Error('Enter a YouTube URL to read duration');
+  }
+
+  const serial = ++probeSerial;
+  if (activeProbe) {
+    try { activeProbe.kill(); } catch { /* already gone */ }
+    activeProbe = null;
+  }
+
+  const attempt = async (cookiesBrowser) => {
+    if (serial !== probeSerial) {
+      const err = new Error('superseded');
+      err.code = 'SUPERSEDED';
+      throw err;
+    }
+    const result = await runYtdlpCapture(ytdlpPath, durationArgs(url.trim(), cookiesBrowser), timeoutMs);
+    if (serial !== probeSerial) {
+      const err = new Error('superseded');
+      err.code = 'SUPERSEDED';
+      throw err;
+    }
+    if (result.timedOut) {
+      throw new Error('yt-dlp timed out while reading duration');
+    }
+    return result;
+  };
+
+  const first = await attempt();
+  if (first.code === 0) {
+    const seconds = parseDurationOutput(first.stdout);
+    if (seconds == null) throw new Error('Could not read video duration');
+    return seconds;
+  }
+
+  const needsCookies = /sign in|age|cookies/i.test(first.stderr || '');
+  if (!needsCookies) {
+    throw new Error(`yt-dlp exited with code ${first.code}: ${(first.stderr || '').slice(-500)}`);
+  }
+
+  const retry = await attempt('chrome');
+  if (retry.code === 0) {
+    const seconds = parseDurationOutput(retry.stdout);
+    if (seconds == null) throw new Error('Could not read video duration');
+    return seconds;
+  }
+
+  throw new Error(`yt-dlp exited with code ${retry.code}: ${(retry.stderr || '').slice(-500)}`);
+}
+
+module.exports = {
+  extractClip,
+  validateTimestamps,
+  probeDuration,
+  parseDurationOutput,
+  isYoutubeUrl,
+};

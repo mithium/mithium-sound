@@ -69,6 +69,10 @@ function resolveBin(name) {
   return name; // fallback to PATH lookup
 }
 
+function resolveYtdlpPath() {
+  return settings.get('ytdlpPath') || resolveBin('yt-dlp.exe');
+}
+
 function getIconPath() {
   const candidates = [
     path.join(process.resourcesPath, 'icon.png'),        // packaged
@@ -208,7 +212,7 @@ ipcMain.handle('youtube:extract', async (_e, opts) => {
   const filename = `${Date.now()}-yt-${name.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp3`;
   const outputPath = path.join(soundboard.getSoundsDir(), filename);
   // Use full paths to bundled binaries; settings can override
-  const ytdlpPath = settings.get('ytdlpPath') || resolveBin('yt-dlp.exe');
+  const ytdlpPath = resolveYtdlpPath();
   const ffmpegDir = bundledBinDir || '';
 
   await youtube.extractClip({
@@ -235,6 +239,14 @@ ipcMain.handle('youtube:extract', async (_e, opts) => {
   });
 
   return { id, name, filename };
+});
+
+ipcMain.handle('youtube:probeDuration', async (_e, url) => {
+  const duration = await youtube.probeDuration({
+    url,
+    ytdlpPath: resolveYtdlpPath(),
+  });
+  return { duration };
 });
 
 // --- Shell IPC ---

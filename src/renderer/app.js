@@ -274,8 +274,213 @@ contextMenu.querySelector('[data-action="delete"]').addEventListener('click', as
   }
 });
 
+// --- YouTube trim range ---
+const ytUrl = $('#yt-url');
+const ytStart = $('#yt-start');
+const ytEnd = $('#yt-end');
+const ytRangeStart = $('#yt-range-start');
+const ytRangeEnd = $('#yt-range-end');
+const ytTrimFill = $('#yt-trim-fill');
+const ytTrimHint = $('#yt-trim-hint');
+
+const TRIM_FALLBACK_MAX = 30;
+let trimMax = TRIM_FALLBACK_MAX;
+let trimStart = 0;
+let trimEnd = TRIM_FALLBACK_MAX;
+let durationState = 'unknown'; // unknown | loading | known | failed
+let trimTouched = false;
+let probeToken = 0;
+let probeTimer = null;
+
+function paintTrim() {
+  const max = Math.max(1, Number(ytRangeStart.max) || TRIM_FALLBACK_MAX);
+  const start = Number(ytRangeStart.value);
+  const end = Number(ytRangeEnd.value);
+  ytTrimFill.style.left = `${(start / max) * 100}%`;
+  ytTrimFill.style.right = `${100 - (end / max) * 100}%`;
+}
+
+function setSlider(start, end, max) {
+  const cap = Math.max(1, max);
+  ytRangeStart.max = String(cap);
+  ytRangeEnd.max = String(cap);
+  ytRangeStart.value = String(start);
+  ytRangeEnd.value = String(end);
+  paintTrim();
+}
+
+function activeCap() {
+  return durationState === 'known' ? trimMax : TRIM_FALLBACK_MAX;
+}
+
+function writeTouchedFields() {
+  if (ytStart.value.trim()) ytStart.value = formatClock(trimStart);
+  if (ytEnd.value.trim()) ytEnd.value = formatClock(trimEnd);
+}
+
+function applyFallbackClamp() {
+  trimMax = TRIM_FALLBACK_MAX;
+  const fixed = clampRange(trimStart, trimEnd, TRIM_FALLBACK_MAX, 'end');
+  trimStart = fixed.start;
+  trimEnd = fixed.end;
+  setSlider(trimStart, trimEnd, TRIM_FALLBACK_MAX);
+  writeTouchedFields();
+}
+
+function applyKnownDuration(seconds) {
+  const max = Math.max(1, Math.floor(Number(seconds)));
+  durationState = 'known';
+  trimMax = max;
+  const fixed = clampRange(trimStart, trimEnd, max, 'end');
+  trimStart = fixed.start;
+  trimEnd = fixed.end;
+  setSlider(trimStart, trimEnd, max);
+  writeTouchedFields();
+  ytTrimHint.textContent = `Video length ${formatClock(max)}`;
+}
+
+function resetTrim() {
+  probeToken += 1;
+  clearTimeout(probeTimer);
+  durationState = 'unknown';
+  trimTouched = false;
+  trimStart = 0;
+  trimEnd = TRIM_FALLBACK_MAX;
+  trimMax = TRIM_FALLBACK_MAX;
+  setSlider(0, TRIM_FALLBACK_MAX, TRIM_FALLBACK_MAX);
+  ytTrimHint.textContent = 'Duration unknown — range limited to 0:30';
+}
+
+async function probeUrl(url, token) {
+  durationState = 'loading';
+  ytTrimHint.textContent = 'Checking duration…';
+  try {
+    const result = await window.api.youtubeProbeDuration(url);
+    if (token !== probeToken) return;
+    const seconds = Number(result && result.duration);
+    if (!Number.isFinite(seconds) || seconds < 1) {
+      throw new Error('Could not read video duration');
+    }
+    applyKnownDuration(seconds);
+  } catch (err) {
+    if (token !== probeToken) return;
+    durationState = 'failed';
+    applyFallbackClamp();
+    ytTrimHint.textContent = "Couldn't read duration — range limited to 0:30";
+    console.error('Duration probe failed:', err && err.message ? err.message : err);
+  }
+}
+
+function scheduleProbe() {
+  clearTimeout(probeTimer);
+  probeToken += 1;
+  const token = probeToken;
+  const url = ytUrl.value.trim();
+  if (!url || !isYoutubeUrl(url)) {
+    durationState = 'unknown';
+    trimMax = TRIM_FALLBACK_MAX;
+    const vis = clampRange(
+      Math.min(trimStart, TRIM_FALLBACK_MAX),
+      Math.min(Math.max(trimEnd, 1), TRIM_FALLBACK_MAX),
+      TRIM_FALLBACK_MAX,
+      'end'
+    );
+    setSlider(vis.start, vis.end, TRIM_FALLBACK_MAX);
+    ytTrimHint.textContent = 'Duration unknown — range limited to 0:30';
+    return;
+  }
+  durationState = 'loading';
+  ytTrimHint.textContent = 'Checking duration…';
+  probeTimer = setTimeout(() => probeUrl(url, token), 400);
+}
+
+ytUrl.addEventListener('input', scheduleProbe);
+
+function onRangeInput(prefer) {
+  const cap = Math.max(1, Number(ytRangeStart.max) || TRIM_FALLBACK_MAX);
+  const fixed = clampRange(Number(ytRangeStart.value), Number(ytRangeEnd.value), cap, prefer);
+  trimStart = fixed.start;
+  trimEnd = fixed.end;
+  trimMax = durationState === 'known' ? cap : TRIM_FALLBACK_MAX;
+  trimTouched = true;
+  setSlider(trimStart, trimEnd, cap);
+  ytStart.value = formatClock(trimStart);
+  ytEnd.value = formatClock(trimEnd);
+}
+
+ytRangeStart.addEventListener('input', () => onRangeInput('start'));
+ytRangeEnd.addEventListener('input', () => onRangeInput('end'));
+ytRangeStart.addEventListener('pointerdown', () => {
+  ytRangeStart.style.zIndex = '4';
+  ytRangeEnd.style.zIndex = '3';
+});
+ytRangeEnd.addEventListener('pointerdown', () => {
+  ytRangeEnd.style.zIndex = '4';
+  ytRangeStart.style.zIndex = '3';
+});
+
+function previewFromText(prefer) {
+  const rawStart = parseClock(ytStart.value);
+  const rawEnd = parseClock(ytEnd.value);
+  if (rawStart != null) trimStart = rawStart;
+  if (rawEnd != null) trimEnd = rawEnd;
+  if (rawStart != null || rawEnd != null) trimTouched = true;
+  const cap = activeCap();
+  // While a probe is in flight, keep typed times past the temporary 0:30 cap.
+  const vis = clampRange(Math.min(trimStart, cap), Math.min(Math.max(trimEnd, 1), cap), cap, prefer);
+  setSlider(vis.start, vis.end, cap);
+}
+
+ytStart.addEventListener('input', () => previewFromText('start'));
+ytEnd.addEventListener('input', () => previewFromText('end'));
+
+function commitText(prefer) {
+  const input = prefer === 'start' ? ytStart : ytEnd;
+  const raw = input.value.trim();
+  if (!raw) {
+    if (trimTouched) input.value = formatClock(prefer === 'start' ? trimStart : trimEnd);
+    return;
+  }
+  const parsed = parseClock(raw);
+  if (parsed == null) {
+    input.value = formatClock(prefer === 'start' ? trimStart : trimEnd);
+    previewFromText(prefer);
+    return;
+  }
+  if (prefer === 'start') trimStart = parsed;
+  else trimEnd = parsed;
+  trimTouched = true;
+
+  if (durationState === 'loading') {
+    if (trimStart >= trimEnd) {
+      const fixed = clampRange(trimStart, trimEnd, Math.max(trimEnd, trimStart + 1, 1), prefer);
+      trimStart = fixed.start;
+      trimEnd = fixed.end;
+    }
+    if (ytStart.value.trim()) ytStart.value = formatClock(trimStart);
+    if (ytEnd.value.trim()) ytEnd.value = formatClock(trimEnd);
+    input.value = formatClock(prefer === 'start' ? trimStart : trimEnd);
+    previewFromText(prefer);
+    return;
+  }
+
+  const cap = activeCap();
+  const fixed = clampRange(trimStart, trimEnd, cap, prefer);
+  trimStart = fixed.start;
+  trimEnd = fixed.end;
+  setSlider(trimStart, trimEnd, cap);
+  ytStart.value = ytStart.value.trim() ? formatClock(trimStart) : ytStart.value;
+  ytEnd.value = ytEnd.value.trim() ? formatClock(trimEnd) : ytEnd.value;
+  input.value = formatClock(prefer === 'start' ? trimStart : trimEnd);
+}
+
+ytStart.addEventListener('blur', () => commitText('start'));
+ytEnd.addEventListener('blur', () => commitText('end'));
+
 // --- YouTube Extraction ---
 $('#yt-extract-btn').addEventListener('click', async () => {
+  commitText('start');
+  commitText('end');
   const url = $('#yt-url').value.trim();
   const start = $('#yt-start').value.trim();
   const end = $('#yt-end').value.trim();
@@ -305,6 +510,7 @@ $('#yt-extract-btn').addEventListener('click', async () => {
     $('#yt-start').value = '';
     $('#yt-end').value = '';
     $('#yt-name').value = '';
+    resetTrim();
     await refreshSounds();
     // Switch to soundboard tab
     $$('.tab').forEach((t) => t.classList.remove('active'));
