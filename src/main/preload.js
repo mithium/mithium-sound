@@ -17,6 +17,14 @@ contextBridge.exposeInMainWorld('api', {
   soundImport: () => ipcRenderer.invoke('sound:import'),
   soundDelete: (id) => ipcRenderer.invoke('sound:delete', id),
   soundRename: (id, name) => ipcRenderer.invoke('sound:rename', id, name),
+  soundAssignToGroup: (soundId, groupId) => ipcRenderer.invoke('sound:assignToGroup', soundId, groupId),
+
+  // Groups
+  groupGetAll: () => ipcRenderer.invoke('group:getAll'),
+  groupCreate: (name) => ipcRenderer.invoke('group:create', name),
+  groupRename: (id, name) => ipcRenderer.invoke('group:rename', id, name),
+  groupDelete: (id) => ipcRenderer.invoke('group:delete', id),
+  groupToggleCollapsed: (id) => ipcRenderer.invoke('group:toggleCollapsed', id),
 
   // YouTube
   youtubeExtract: (opts) => ipcRenderer.invoke('youtube:extract', opts),

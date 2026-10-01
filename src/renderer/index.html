@@ -38,6 +38,7 @@
   <section id="tab-sounds" class="tab-content active">
     <div class="toolbar">
       <button id="import-btn">Import Sound</button>
+      <button id="create-group-btn">+ New Group</button>
       <div class="volume-control">
         <label for="volume-slider">Vol</label>
         <input type="range" id="volume-slider" min="0" max="150" value="100">
@@ -223,7 +224,15 @@
   <!-- Context Menu -->
   <div id="context-menu" class="context-menu hidden">
     <button data-action="rename">Rename</button>
-    <button data-action="delete">Delete</button>
+    <div class="context-menu-divider"></div>
+    <div data-action="move-to-group" class="context-submenu">
+      <button class="context-submenu-trigger">Move to Group ▶</button>
+      <div class="context-submenu-content hidden" id="group-submenu">
+        <button data-group-id="">Ungrouped</button>
+      </div>
+    </div>
+    <div class="context-menu-divider"></div>
+    <button data-action="delete" class="danger-action">Delete</button>
   </div>
 
   <script src="timecode.js"></script>
