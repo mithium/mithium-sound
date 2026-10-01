@@ -430,6 +430,9 @@ contextMenu.querySelector('[data-action="delete"]').addEventListener('click', as
   if (!contextTarget) return;
   const sound = sounds.find((s) => s.id === contextTarget);
   if (confirm(`Delete "${sound?.name}"?`)) {
+    if (contextTarget === armedClipId) {
+      armedClipId = null;
+    }
     await window.api.soundDelete(contextTarget);
     await refreshSounds();
   }
