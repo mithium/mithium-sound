@@ -244,6 +244,19 @@ button:disabled {
   color: var(--success);
 }
 
+.stop-btn {
+  background: var(--bg-surface);
+  color: var(--text);
+  border: 1px solid var(--border-light);
+  padding: 7px 16px;
+}
+
+.stop-btn:hover:not(:disabled) {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: white;
+}
+
 .volume-control {
   display: flex;
   align-items: center;

@@ -525,6 +525,11 @@ importBtn.addEventListener('click', async () => {
 // --- Create Group ---
 $('#create-group-btn').addEventListener('click', createGroupPrompt);
 
+// --- Stop Button ---
+$('#stop-btn').addEventListener('click', async () => {
+  await stopAllPlayback();
+});
+
 // --- Context Menu ---
 function showContextMenu(e, soundId) {
   e.preventDefault();
@@ -1009,12 +1014,22 @@ function formatBytes(bytes) {
 
 // --- Keyboard Handlers for Hold-to-Play ---
 document.addEventListener('keydown', (e) => {
+  const target = e.target;
+  const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+  
+  // Delete key to stop playback
+  if (e.key === 'Delete' && !isInputField) {
+    e.preventDefault();
+    stopAllPlayback();
+    return;
+  }
+  
+  // Hold-to-play for V/T keys
   if (!holdToPlayActive || !armedClipId || isKeyHeld) return;
   
   const key = e.key.toLowerCase();
   if (key === 'v' || key === 't') {
-    const target = e.target;
-    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+    if (isInputField) return;
     
     e.preventDefault();
     isKeyHeld = true;
@@ -1023,10 +1038,15 @@ document.addEventListener('keydown', (e) => {
 });
 
 document.addEventListener('keyup', async (e) => {
+  const target = e.target;
+  const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+  
   if (!holdToPlayActive || !armedClipId || !isKeyHeld) return;
   
   const key = e.key.toLowerCase();
   if (key === 'v' || key === 't') {
+    if (isInputField) return;
+    
     e.preventDefault();
     isKeyHeld = false;
     await stopAllPlayback();
