@@ -240,6 +240,10 @@ ipcMain.handle('sound:play', (_e, id) => {
   return { filePath, volume: vol, mode: outputMode };
 });
 
+ipcMain.handle('sound:stop', () => {
+  bot.stopSound();
+});
+
 ipcMain.handle('sound:getFilePath', (_e, id) => {
   const sounds = soundboard.getAllSounds();
   const sound = sounds.find((s) => s.id === id);
@@ -274,6 +278,27 @@ ipcMain.handle('sound:delete', (_e, id) => {
 
 ipcMain.handle('sound:rename', (_e, id, name) => {
   soundboard.renameSound(id, name);
+});
+
+ipcMain.handle('sound:assignToGroup', (_e, soundId, groupId) => {
+  soundboard.assignSoundToGroup(soundId, groupId);
+});
+
+// --- Group IPC ---
+ipcMain.handle('group:getAll', () => soundboard.getAllGroups());
+
+ipcMain.handle('group:create', (_e, name) => soundboard.createGroup(name));
+
+ipcMain.handle('group:rename', (_e, id, name) => {
+  soundboard.renameGroup(id, name);
+});
+
+ipcMain.handle('group:delete', (_e, id) => {
+  soundboard.deleteGroup(id);
+});
+
+ipcMain.handle('group:toggleCollapsed', (_e, id) => {
+  return soundboard.toggleGroupCollapsed(id);
 });
 
 // --- YouTube IPC ---

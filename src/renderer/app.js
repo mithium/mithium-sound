@@ -1,9 +1,13 @@
 // --- State ---
 let sounds = [];
+let groups = [];
 let contextTarget = null;
 let playingId = null;
 let audioElement = null;
 let availableDevices = [];
+let armedClipId = null;
+let holdToPlayActive = false;
+let isKeyHeld = false;
 
 // --- DOM refs ---
 const $ = (sel) => document.querySelector(sel);
@@ -94,9 +98,12 @@ async function loadSettings() {
   $('#setting-ytdlp').value = s.ytdlpPath || 'yt-dlp';
   $('#setting-ffmpeg').value = s.ffmpegPath || 'ffmpeg';
   $('#setting-autoconnect').checked = s.autoConnect || false;
+  $('#setting-hold-to-play').checked = s.holdToPlayMode || false;
   $('#setting-output-mode').value = s.outputMode || 'discord';
   volumeSlider.value = s.volume || 100;
   volumeValue.textContent = `${volumeSlider.value}%`;
+  
+  holdToPlayActive = s.holdToPlayMode || false;
   
   await enumerateDevices();
   $('#setting-device').value = s.selectedDeviceId || 'default';
@@ -110,11 +117,17 @@ $('#settings-save-btn').addEventListener('click', async () => {
     ytdlpPath: $('#setting-ytdlp').value,
     ffmpegPath: $('#setting-ffmpeg').value,
     autoConnect: $('#setting-autoconnect').checked,
+    holdToPlayMode: $('#setting-hold-to-play').checked,
     volume: parseInt(volumeSlider.value, 10),
     outputMode: $('#setting-output-mode').value,
     selectedDeviceId: $('#setting-device').value,
   };
   await window.api.settingsSave(data);
+  holdToPlayActive = data.holdToPlayMode;
+  if (!holdToPlayActive) {
+    armedClipId = null;
+  }
+  renderSoundGrid();
   const status = $('#settings-status');
   status.textContent = 'Settings saved!';
   status.className = 'success-text';
@@ -244,6 +257,7 @@ leaveBtn.addEventListener('click', async () => {
 // --- Sound Grid ---
 async function refreshSounds() {
   sounds = await window.api.soundGetAll();
+  groups = await window.api.groupGetAll();
   renderSoundGrid();
 }
 
@@ -252,30 +266,188 @@ function renderSoundGrid() {
     soundGrid.innerHTML = '<p class="empty-message">No sounds yet. Import some audio files or extract from YouTube.</p>';
     return;
   }
+  
   soundGrid.innerHTML = '';
-  sounds.forEach((s) => {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'sound-btn-wrapper';
-
-    const btn = document.createElement('button');
-    btn.className = 'sound-btn';
-    if (s.id === playingId) btn.classList.add('playing');
-    btn.textContent = s.name;
-    btn.dataset.id = s.id;
-
-    btn.addEventListener('click', () => playSound(s.id));
-    btn.addEventListener('contextmenu', (e) => showContextMenu(e, s.id));
-
-    if (s.source_type === 'youtube') {
-      const badge = document.createElement('span');
-      badge.className = 'source-badge';
-      badge.textContent = 'YT';
-      wrapper.appendChild(badge);
-    }
-
-    wrapper.appendChild(btn);
-    soundGrid.appendChild(wrapper);
+  
+  const ungroupedSounds = sounds.filter(s => !s.group_id);
+  const groupedSounds = sounds.filter(s => s.group_id);
+  
+  groups.forEach(group => {
+    const groupSounds = groupedSounds.filter(s => s.group_id === group.id);
+    if (groupSounds.length === 0) return;
+    
+    const groupContainer = document.createElement('div');
+    groupContainer.className = 'sound-group';
+    
+    const groupHeader = document.createElement('div');
+    groupHeader.className = 'sound-group-header';
+    groupHeader.dataset.groupId = group.id;
+    
+    const expandIcon = document.createElement('span');
+    expandIcon.className = 'group-expand-icon';
+    expandIcon.textContent = group.collapsed ? '▶' : '▼';
+    
+    const groupName = document.createElement('span');
+    groupName.className = 'group-name';
+    groupName.textContent = group.name;
+    
+    const groupActions = document.createElement('div');
+    groupActions.className = 'group-actions';
+    
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'group-action-btn';
+    renameBtn.textContent = '✏️';
+    renameBtn.title = 'Rename group';
+    renameBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      renameGroupPrompt(group.id, group.name);
+    });
+    
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'group-action-btn';
+    deleteBtn.textContent = '🗑️';
+    deleteBtn.title = 'Delete group (sounds will be ungrouped)';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteGroupPrompt(group.id, group.name);
+    });
+    
+    groupActions.appendChild(renameBtn);
+    groupActions.appendChild(deleteBtn);
+    
+    groupHeader.appendChild(expandIcon);
+    groupHeader.appendChild(groupName);
+    groupHeader.appendChild(groupActions);
+    
+    groupHeader.addEventListener('click', () => toggleGroup(group.id));
+    
+    const groupContent = document.createElement('div');
+    groupContent.className = 'sound-group-content';
+    if (group.collapsed) groupContent.classList.add('collapsed');
+    
+    groupSounds.forEach(s => {
+      groupContent.appendChild(createSoundButton(s));
+    });
+    
+    groupContainer.appendChild(groupHeader);
+    groupContainer.appendChild(groupContent);
+    soundGrid.appendChild(groupContainer);
   });
+  
+  if (ungroupedSounds.length > 0) {
+    if (groups.length > 0) {
+      const ungroupedHeader = document.createElement('div');
+      ungroupedHeader.className = 'sound-group-header ungrouped-header';
+      ungroupedHeader.textContent = 'Ungrouped';
+      soundGrid.appendChild(ungroupedHeader);
+    }
+    
+    const ungroupedContainer = document.createElement('div');
+    ungroupedContainer.className = 'sound-grid-items';
+    
+    ungroupedSounds.forEach(s => {
+      ungroupedContainer.appendChild(createSoundButton(s));
+    });
+    
+    soundGrid.appendChild(ungroupedContainer);
+  }
+}
+
+function createSoundButton(s) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'sound-btn-wrapper';
+
+  const btn = document.createElement('button');
+  btn.className = 'sound-btn';
+  if (s.id === playingId) btn.classList.add('playing');
+  if (s.id === armedClipId) btn.classList.add('armed');
+  btn.textContent = s.name;
+  btn.dataset.id = s.id;
+
+  btn.addEventListener('click', () => playSound(s.id));
+  btn.addEventListener('contextmenu', (e) => showContextMenu(e, s.id));
+
+  if (s.source_type === 'youtube') {
+    const badge = document.createElement('span');
+    badge.className = 'source-badge';
+    badge.textContent = 'YT';
+    wrapper.appendChild(badge);
+  }
+  
+  if (holdToPlayActive) {
+    const armBtn = document.createElement('button');
+    armBtn.className = 'arm-btn';
+    armBtn.textContent = '🎯';
+    armBtn.title = 'Arm for hold-to-play (V/T keys)';
+    armBtn.dataset.id = s.id;
+    if (s.id === armedClipId) armBtn.classList.add('armed');
+    armBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleArmClip(s.id);
+    });
+    wrapper.appendChild(armBtn);
+  }
+
+  wrapper.appendChild(btn);
+  return wrapper;
+}
+
+function toggleArmClip(id) {
+  if (armedClipId === id) {
+    armedClipId = null;
+  } else {
+    armedClipId = id;
+  }
+  renderSoundGrid();
+}
+
+async function toggleGroup(groupId) {
+  await window.api.groupToggleCollapsed(groupId);
+  await refreshSounds();
+}
+
+async function createGroupPrompt() {
+  const name = prompt('Enter group name:');
+  if (name && name.trim()) {
+    await window.api.groupCreate(name.trim());
+    await refreshSounds();
+  }
+}
+
+async function renameGroupPrompt(groupId, currentName) {
+  const newName = prompt('Rename group:', currentName);
+  if (newName && newName.trim() && newName.trim() !== currentName) {
+    await window.api.groupRename(groupId, newName.trim());
+    await refreshSounds();
+  }
+}
+
+async function deleteGroupPrompt(groupId, groupName) {
+  if (confirm(`Delete group "${groupName}"? Sounds in this group will become ungrouped.`)) {
+    await window.api.groupDelete(groupId);
+    await refreshSounds();
+  }
+}
+
+async function moveToGroup(soundId, groupId) {
+  await window.api.soundAssignToGroup(soundId, groupId);
+  await refreshSounds();
+}
+
+async function stopAllPlayback() {
+  try {
+    await window.api.soundStop();
+  } catch (err) {
+    console.error('Failed to stop Discord bot playback:', err);
+  }
+  
+  if (audioElement) {
+    audioElement.pause();
+    audioElement.currentTime = 0;
+  }
+  
+  playingId = null;
+  renderSoundGrid();
 }
 
 async function playLocalAudio(filePath, volume, deviceId) {
@@ -350,10 +522,29 @@ importBtn.addEventListener('click', async () => {
   await refreshSounds();
 });
 
+// --- Create Group ---
+$('#create-group-btn').addEventListener('click', createGroupPrompt);
+
+// --- Stop Button ---
+$('#stop-btn').addEventListener('click', async () => {
+  await stopAllPlayback();
+});
+
 // --- Context Menu ---
 function showContextMenu(e, soundId) {
   e.preventDefault();
   contextTarget = soundId;
+  
+  const groupSubmenu = $('#group-submenu');
+  groupSubmenu.innerHTML = '<button data-group-id="">Ungrouped</button>';
+  
+  groups.forEach(g => {
+    const btn = document.createElement('button');
+    btn.dataset.groupId = g.id;
+    btn.textContent = g.name;
+    groupSubmenu.appendChild(btn);
+  });
+  
   contextMenu.style.left = `${e.clientX}px`;
   contextMenu.style.top = `${e.clientY}px`;
   contextMenu.classList.remove('hidden');
@@ -362,6 +553,22 @@ function showContextMenu(e, soundId) {
 document.addEventListener('click', () => {
   contextMenu.classList.add('hidden');
   contextTarget = null;
+});
+
+const submenuTrigger = contextMenu.querySelector('.context-submenu-trigger');
+const submenuContent = contextMenu.querySelector('.context-submenu-content');
+
+submenuTrigger.addEventListener('click', (e) => {
+  e.stopPropagation();
+  submenuContent.classList.toggle('hidden');
+});
+
+submenuContent.addEventListener('click', async (e) => {
+  if (e.target.tagName === 'BUTTON' && contextTarget) {
+    const groupId = e.target.dataset.groupId;
+    await moveToGroup(contextTarget, groupId || null);
+    contextMenu.classList.add('hidden');
+  }
 });
 
 contextMenu.querySelector('[data-action="rename"]').addEventListener('click', async () => {
@@ -378,6 +585,9 @@ contextMenu.querySelector('[data-action="delete"]').addEventListener('click', as
   if (!contextTarget) return;
   const sound = sounds.find((s) => s.id === contextTarget);
   if (confirm(`Delete "${sound?.name}"?`)) {
+    if (contextTarget === armedClipId) {
+      armedClipId = null;
+    }
     await window.api.soundDelete(contextTarget);
     await refreshSounds();
   }
@@ -801,3 +1011,46 @@ function formatBytes(bytes) {
     }
   }
 })();
+
+// --- Keyboard Handlers for Hold-to-Play ---
+document.addEventListener('keydown', (e) => {
+  const target = e.target;
+  const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+  
+  // Delete key to stop playback
+  if (e.key === 'Delete' && !isInputField) {
+    e.preventDefault();
+    stopAllPlayback();
+    return;
+  }
+  
+  // Hold-to-play for V/T keys
+  if (!holdToPlayActive || !armedClipId || isKeyHeld) return;
+  
+  const key = e.key.toLowerCase();
+  if (key === 'v' || key === 't') {
+    if (isInputField) return;
+    
+    e.preventDefault();
+    isKeyHeld = true;
+    playSound(armedClipId);
+  }
+});
+
+document.addEventListener('keyup', async (e) => {
+  const target = e.target;
+  const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+  
+  if (!holdToPlayActive || !armedClipId || !isKeyHeld) return;
+  
+  const key = e.key.toLowerCase();
+  if (key === 'v' || key === 't') {
+    if (isInputField) return;
+    
+    e.preventDefault();
+    isKeyHeld = false;
+    await stopAllPlayback();
+    armedClipId = null;
+    renderSoundGrid();
+  }
+});
