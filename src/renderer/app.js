@@ -37,6 +37,7 @@ async function enumerateDevices() {
     const devices = await navigator.mediaDevices.enumerateDevices();
     availableDevices = devices.filter(d => d.kind === 'audiooutput');
     updateDeviceList();
+    checkVoiceMeeterStatus();
   } catch (err) {
     console.error('Failed to enumerate devices:', err);
   }
@@ -58,6 +59,29 @@ function updateDeviceList() {
     select.value = currentValue;
   }
 }
+
+function checkVoiceMeeterStatus() {
+  const hasVoiceMeeter = availableDevices.some(device => 
+    device.label.toLowerCase().includes('voicemeeter')
+  );
+  
+  const statusText = $('#voicemeeter-status-text');
+  const downloadBtn = $('#voicemeeter-download-btn');
+  
+  if (hasVoiceMeeter) {
+    statusText.textContent = '✓ VoiceMeeter Detected';
+    statusText.style.color = 'var(--success)';
+    downloadBtn.classList.add('hidden');
+  } else {
+    statusText.textContent = '⚠ VoiceMeeter Not Detected';
+    statusText.style.color = 'var(--warning)';
+    downloadBtn.classList.remove('hidden');
+  }
+}
+
+$('#voicemeeter-download-btn').addEventListener('click', () => {
+  window.api.openExternal('https://vb-audio.com/Voicemeeter/banana.htm');
+});
 
 $('#refresh-devices-btn').addEventListener('click', async () => {
   await enumerateDevices();
@@ -657,6 +681,103 @@ $('#link-discord-dev').addEventListener('click', (e) => {
   e.preventDefault();
   window.api.openExternal('https://discord.com/developers/applications');
 });
+
+// --- Software Updates ---
+let updateDownloaded = false;
+
+$('#check-updates-btn').addEventListener('click', async () => {
+  $('#check-updates-btn').disabled = true;
+  $('#check-updates-btn').textContent = 'Checking...';
+  $('#update-info').classList.add('hidden');
+  
+  try {
+    await window.api.updateCheck();
+  } catch (err) {
+    $('#update-message').textContent = `Update check failed: ${err.message}`;
+    $('#update-info').classList.remove('hidden');
+    $('#update-actions').classList.add('hidden');
+  } finally {
+    $('#check-updates-btn').disabled = false;
+    $('#check-updates-btn').textContent = 'Check for Updates';
+  }
+});
+
+$('#download-update-btn').addEventListener('click', async () => {
+  $('#download-update-btn').disabled = true;
+  $('#download-update-btn').textContent = 'Downloading...';
+  $('#update-progress-container').classList.remove('hidden');
+  
+  try {
+    await window.api.updateDownload();
+  } catch (err) {
+    $('#update-message').textContent = `Download failed: ${err.message}`;
+    $('#update-progress-container').classList.add('hidden');
+    $('#download-update-btn').disabled = false;
+    $('#download-update-btn').textContent = 'Download Update';
+  }
+});
+
+$('#install-update-btn').addEventListener('click', () => {
+  window.api.updateInstall();
+});
+
+window.api.onUpdateChecking(() => {
+  console.log('Checking for updates...');
+});
+
+window.api.onUpdateAvailable((info) => {
+  console.log('Update available:', info.version);
+  $('#update-message').textContent = `Version ${info.version} is available! Current: ${info.currentVersion || 'unknown'}`;
+  $('#update-info').classList.remove('hidden');
+  $('#update-actions').classList.remove('hidden');
+  $('#download-update-btn').classList.remove('hidden');
+  $('#install-update-btn').classList.add('hidden');
+  updateDownloaded = false;
+});
+
+window.api.onUpdateNotAvailable((info) => {
+  console.log('No updates available');
+  $('#update-message').textContent = `You're running the latest version (${info.version})`;
+  $('#update-message').style.color = 'var(--success)';
+  $('#update-info').classList.remove('hidden');
+  $('#update-actions').classList.add('hidden');
+  setTimeout(() => {
+    $('#update-info').classList.add('hidden');
+  }, 3000);
+});
+
+window.api.onUpdateProgress((progress) => {
+  const percent = Math.round(progress.percent);
+  $('#update-progress-fill').style.width = `${percent}%`;
+  $('#update-progress-text').textContent = `${percent}% (${formatBytes(progress.transferred)} / ${formatBytes(progress.total)})`;
+});
+
+window.api.onUpdateDownloaded((info) => {
+  console.log('Update downloaded:', info.version);
+  updateDownloaded = true;
+  $('#update-message').textContent = `Version ${info.version} downloaded and ready to install!`;
+  $('#update-message').style.color = 'var(--success)';
+  $('#update-progress-container').classList.add('hidden');
+  $('#download-update-btn').classList.add('hidden');
+  $('#install-update-btn').classList.remove('hidden');
+});
+
+window.api.onUpdateError((message) => {
+  console.error('Update error:', message);
+  $('#update-message').textContent = `Update error: ${message}`;
+  $('#update-message').style.color = 'var(--danger)';
+  $('#update-info').classList.remove('hidden');
+  $('#update-actions').classList.add('hidden');
+  $('#update-progress-container').classList.add('hidden');
+});
+
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+}
 
 // --- Init ---
 (async () => {

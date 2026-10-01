@@ -28,11 +28,34 @@ contextBridge.exposeInMainWorld('api', {
   // Shell
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
 
+  // Updates
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+
   // Events from main
   onStatus: (cb) => {
     ipcRenderer.on('status', (_e, data) => cb(data));
   },
   onYoutubeProgress: (cb) => {
     ipcRenderer.on('youtube:progress', (_e, pct) => cb(pct));
+  },
+  onUpdateChecking: (cb) => {
+    ipcRenderer.on('update:checking', () => cb());
+  },
+  onUpdateAvailable: (cb) => {
+    ipcRenderer.on('update:available', (_e, info) => cb(info));
+  },
+  onUpdateNotAvailable: (cb) => {
+    ipcRenderer.on('update:not-available', (_e, info) => cb(info));
+  },
+  onUpdateProgress: (cb) => {
+    ipcRenderer.on('update:progress', (_e, progress) => cb(progress));
+  },
+  onUpdateDownloaded: (cb) => {
+    ipcRenderer.on('update:downloaded', (_e, info) => cb(info));
+  },
+  onUpdateError: (cb) => {
+    ipcRenderer.on('update:error', (_e, message) => cb(message));
   },
 });

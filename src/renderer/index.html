@@ -140,6 +140,32 @@
         </label>
       </div>
       <details class="setup-guide" open>
+        <summary>VoiceMeeter Setup Helper</summary>
+        <p style="margin: 8px 0; color: var(--text-muted); line-height: 1.6;">
+          <strong>VoiceMeeter Banana</strong> is a virtual audio mixer that lets you combine multiple audio sources (like Nvidia Broadcast + this soundboard) into one virtual microphone for Discord, Zoom, etc.
+        </p>
+        <div id="voicemeeter-status" style="margin: 12px 0; padding: 10px; border-radius: 5px; background: var(--bg-surface); border: 1px solid var(--border);">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <span id="voicemeeter-status-text" style="font-weight: 600;">Checking for VoiceMeeter...</span>
+            <button id="voicemeeter-download-btn" class="hidden" type="button" style="padding: 5px 12px; font-size: 12px;">Download VoiceMeeter Banana</button>
+          </div>
+          <p style="font-size: 12px; color: var(--text-muted); margin: 0;">VoiceMeeter devices will appear in the output list below after installation.</p>
+        </div>
+        <details style="margin: 12px 0; font-size: 12px;">
+          <summary style="cursor: pointer; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px;">Setup Checklist for Martin's Configuration</summary>
+          <ol style="margin: 8px 0 0 20px; padding: 0; line-height: 1.8; color: var(--text-secondary);">
+            <li>Install VoiceMeeter Banana from the official site (button above if not detected)</li>
+            <li>Open VoiceMeeter Banana application</li>
+            <li>Set <strong>Hardware Input 1</strong> to your Nvidia Broadcast output device</li>
+            <li>In this app (below), set <strong>Output Mode</strong> to "Local Device Only" or "Both"</li>
+            <li>Select <strong>VoiceMeeter Input (VAIO)</strong> as the Local Output Device</li>
+            <li>In Windows Sound Settings, set <strong>VoiceMeeter Output</strong> as your default microphone</li>
+            <li>In Discord/Zoom/etc., select <strong>VoiceMeeter Output</strong> as your input device</li>
+            <li>Adjust levels in VoiceMeeter Banana to balance Broadcast voice + soundboard</li>
+          </ol>
+        </details>
+      </details>
+      <details class="setup-guide" open>
         <summary>Audio Output Settings</summary>
         <p style="margin: 8px 0; color: var(--text-muted);">Choose where sounds should play. For VoiceMeeter users: select the VoiceMeeter <strong>Input</strong> (playback) device, not Output.</p>
         <div class="form-group">
@@ -159,6 +185,26 @@
             <button id="refresh-devices-btn" type="button">Refresh</button>
           </div>
           <p style="margin-top: 6px; font-size: 12px; color: var(--text-muted);">Select VoiceMeeter Input (VAIO) for mixing with Nvidia Broadcast</p>
+        </div>
+      </details>
+      <details class="setup-guide">
+        <summary>Software Updates</summary>
+        <p style="margin: 8px 0; color: var(--text-muted);">Keep Mithium Sound up to date with the latest features and fixes.</p>
+        <div id="update-status" style="margin: 12px 0;">
+          <button id="check-updates-btn" type="button">Check for Updates</button>
+          <div id="update-info" class="hidden" style="margin-top: 10px; padding: 10px; border-radius: 5px; background: var(--bg-surface); border: 1px solid var(--border);">
+            <p id="update-message" style="margin: 0 0 8px 0; font-size: 13px;"></p>
+            <div id="update-actions" class="hidden" style="display: flex; gap: 8px;">
+              <button id="download-update-btn" type="button" style="font-size: 12px; padding: 6px 14px;">Download Update</button>
+              <button id="install-update-btn" type="button" class="hidden" style="font-size: 12px; padding: 6px 14px;">Restart & Install</button>
+            </div>
+            <div id="update-progress-container" class="hidden" style="margin-top: 10px;">
+              <div class="progress-bar">
+                <div id="update-progress-fill" class="progress-fill"></div>
+              </div>
+              <span id="update-progress-text" style="font-size: 12px; color: var(--text-muted); margin-top: 4px; display: block;"></span>
+            </div>
+          </div>
         </div>
       </details>
       <button id="settings-save-btn">Save Settings</button>
