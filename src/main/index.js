@@ -174,7 +174,20 @@ ipcMain.handle('sound:play', (_e, id) => {
   if (!sound) throw new Error('Sound not found');
   const filePath = soundboard.getFilePath(sound.filename);
   const vol = (settings.get('volume') || 100) / 100;
-  bot.playSound(filePath, vol);
+  const outputMode = settings.get('outputMode') || 'discord';
+  
+  if (outputMode === 'discord' || outputMode === 'both') {
+    bot.playSound(filePath, vol);
+  }
+  
+  return { filePath, volume: vol, mode: outputMode };
+});
+
+ipcMain.handle('sound:getFilePath', (_e, id) => {
+  const sounds = soundboard.getAllSounds();
+  const sound = sounds.find((s) => s.id === id);
+  if (!sound) throw new Error('Sound not found');
+  return soundboard.getFilePath(sound.filename);
 });
 
 ipcMain.handle('sound:import', async () => {

@@ -2,6 +2,8 @@
 let sounds = [];
 let contextTarget = null;
 let playingId = null;
+let audioElement = null;
+let availableDevices = [];
 
 // --- DOM refs ---
 const $ = (sel) => document.querySelector(sel);
@@ -29,6 +31,38 @@ $$('.tab').forEach((tab) => {
   });
 });
 
+// --- Audio Device Management ---
+async function enumerateDevices() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    availableDevices = devices.filter(d => d.kind === 'audiooutput');
+    updateDeviceList();
+  } catch (err) {
+    console.error('Failed to enumerate devices:', err);
+  }
+}
+
+function updateDeviceList() {
+  const select = $('#setting-device');
+  const currentValue = select.value;
+  select.innerHTML = '<option value="default">System Default</option>';
+  
+  availableDevices.forEach(device => {
+    const option = document.createElement('option');
+    option.value = device.deviceId;
+    option.textContent = device.label || `Device ${device.deviceId.substring(0, 8)}...`;
+    select.appendChild(option);
+  });
+  
+  if (currentValue && Array.from(select.options).some(opt => opt.value === currentValue)) {
+    select.value = currentValue;
+  }
+}
+
+$('#refresh-devices-btn').addEventListener('click', async () => {
+  await enumerateDevices();
+});
+
 // --- Settings ---
 async function loadSettings() {
   const s = await window.api.settingsGet();
@@ -36,8 +70,13 @@ async function loadSettings() {
   $('#setting-ytdlp').value = s.ytdlpPath || 'yt-dlp';
   $('#setting-ffmpeg').value = s.ffmpegPath || 'ffmpeg';
   $('#setting-autoconnect').checked = s.autoConnect || false;
+  $('#setting-output-mode').value = s.outputMode || 'discord';
   volumeSlider.value = s.volume || 100;
   volumeValue.textContent = `${volumeSlider.value}%`;
+  
+  await enumerateDevices();
+  $('#setting-device').value = s.selectedDeviceId || 'default';
+  
   return s;
 }
 
@@ -48,6 +87,8 @@ $('#settings-save-btn').addEventListener('click', async () => {
     ffmpegPath: $('#setting-ffmpeg').value,
     autoConnect: $('#setting-autoconnect').checked,
     volume: parseInt(volumeSlider.value, 10),
+    outputMode: $('#setting-output-mode').value,
+    selectedDeviceId: $('#setting-device').value,
   };
   await window.api.settingsSave(data);
   const status = $('#settings-status');
@@ -213,21 +254,65 @@ function renderSoundGrid() {
   });
 }
 
-async function playSound(id) {
+async function playLocalAudio(filePath, volume, deviceId) {
   try {
-    // Auto-join last channel if not connected
-    const settings = await window.api.settingsGet();
-    if (settings.lastChannelId && leaveBtn.classList.contains('hidden')) {
+    if (!audioElement) {
+      audioElement = new Audio();
+      audioElement.addEventListener('ended', () => {
+        playingId = null;
+        renderSoundGrid();
+      });
+      audioElement.addEventListener('error', (e) => {
+        console.error('Audio playback error:', e);
+        playingId = null;
+        renderSoundGrid();
+      });
+    }
+    
+    audioElement.src = filePath;
+    audioElement.volume = Math.max(0, Math.min(1, volume));
+    
+    if (deviceId && deviceId !== 'default' && typeof audioElement.setSinkId === 'function') {
       try {
-        await window.api.botJoinChannel(settings.lastChannelId);
-        joinBtn.classList.add('hidden');
-        leaveBtn.classList.remove('hidden');
+        await audioElement.setSinkId(deviceId);
       } catch (err) {
-        alert(`Failed to auto-join channel: ${err.message}`);
-        return;
+        console.error('Failed to set output device:', err);
       }
     }
-    await window.api.soundPlay(id);
+    
+    await audioElement.play();
+  } catch (err) {
+    console.error('Local playback error:', err);
+    throw err;
+  }
+}
+
+async function playSound(id) {
+  try {
+    const settings = await window.api.settingsGet();
+    const outputMode = settings.outputMode || 'discord';
+    
+    if (outputMode === 'discord' || outputMode === 'both') {
+      if (settings.lastChannelId && leaveBtn.classList.contains('hidden')) {
+        try {
+          await window.api.botJoinChannel(settings.lastChannelId);
+          joinBtn.classList.add('hidden');
+          leaveBtn.classList.remove('hidden');
+        } catch (err) {
+          if (outputMode === 'discord') {
+            alert(`Failed to auto-join channel: ${err.message}`);
+            return;
+          }
+        }
+      }
+    }
+    
+    const result = await window.api.soundPlay(id);
+    
+    if ((outputMode === 'local' || outputMode === 'both') && result.filePath) {
+      await playLocalAudio(result.filePath, result.volume, settings.selectedDeviceId);
+    }
+    
     playingId = id;
     renderSoundGrid();
   } catch (err) {

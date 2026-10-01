@@ -139,6 +139,28 @@
           <input type="checkbox" id="setting-autoconnect"> Auto-connect on login
         </label>
       </div>
+      <details class="setup-guide" open>
+        <summary>Audio Output Settings</summary>
+        <p style="margin: 8px 0; color: var(--text-muted);">Choose where sounds should play. For VoiceMeeter users: select the VoiceMeeter <strong>Input</strong> (playback) device, not Output.</p>
+        <div class="form-group">
+          <label for="setting-output-mode">Output Mode</label>
+          <select id="setting-output-mode">
+            <option value="discord">Discord Bot Only</option>
+            <option value="local">Local Device Only</option>
+            <option value="both">Both (Discord + Local)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="setting-device">Local Output Device</label>
+          <div style="display: flex; gap: 8px;">
+            <select id="setting-device" style="flex: 1;">
+              <option value="default">System Default</option>
+            </select>
+            <button id="refresh-devices-btn" type="button">Refresh</button>
+          </div>
+          <p style="margin-top: 6px; font-size: 12px; color: var(--text-muted);">Select VoiceMeeter Input (VAIO) for mixing with Nvidia Broadcast</p>
+        </div>
+      </details>
       <button id="settings-save-btn">Save Settings</button>
       <p id="settings-status" class="hidden"></p>
     </div>

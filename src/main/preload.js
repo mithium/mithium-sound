@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('api', {
   // Sounds
   soundGetAll: () => ipcRenderer.invoke('sound:getAll'),
   soundPlay: (id) => ipcRenderer.invoke('sound:play', id),
+  soundGetFilePath: (id) => ipcRenderer.invoke('sound:getFilePath', id),
   soundImport: () => ipcRenderer.invoke('sound:import'),
   soundDelete: (id) => ipcRenderer.invoke('sound:delete', id),
   soundRename: (id, name) => ipcRenderer.invoke('sound:rename', id, name),
