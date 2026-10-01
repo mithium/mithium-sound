@@ -123,6 +123,10 @@ $('#settings-save-btn').addEventListener('click', async () => {
   };
   await window.api.settingsSave(data);
   holdToPlayActive = data.holdToPlayMode;
+  if (!holdToPlayActive) {
+    armedClipId = null;
+  }
+  renderSoundGrid();
   const status = $('#settings-status');
   status.textContent = 'Settings saved!';
   status.className = 'success-text';
