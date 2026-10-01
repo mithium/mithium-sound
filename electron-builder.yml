@@ -18,6 +18,23 @@ extraResources:
 win:
   icon: build/icon.ico
   target:
+    - target: nsis
+      arch: x64
     - target: zip
       arch: x64
   signAndEditExecutable: false
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Mithium Sound
+  uninstallDisplayName: Mithium Sound
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  artifactName: ${productName}-Setup-${version}.${ext}
+publish:
+  provider: github
+  owner: mithium
+  repo: mithium-sound
+  releaseType: release

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { autoUpdater } = require('electron-updater');
 
 // Resolve bundled bin directory and add to PATH before loading anything
 let bundledBinDir = null;
@@ -59,6 +60,51 @@ const youtube = require('./youtube');
 const settings = require('./settings');
 
 let mainWindow = null;
+
+// --- Auto-updater configuration ---
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
+
+autoUpdater.on('error', (err) => {
+  console.error('Auto-updater error:', err);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update:error', err.message);
+  }
+});
+
+autoUpdater.on('checking-for-update', () => {
+  console.log('Checking for updates...');
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update:checking');
+  }
+});
+
+autoUpdater.on('update-available', (info) => {
+  console.log('Update available:', info.version);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update:available', info);
+  }
+});
+
+autoUpdater.on('update-not-available', (info) => {
+  console.log('No updates available');
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update:not-available', info);
+  }
+});
+
+autoUpdater.on('download-progress', (progress) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update:progress', progress);
+  }
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+  console.log('Update downloaded:', info.version);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update:downloaded', info);
+  }
+});
 
 // Resolve a bundled binary to its full path
 function resolveBin(name) {
@@ -133,6 +179,17 @@ console.error = (...args) => {
 app.whenReady().then(async () => {
   await soundboard.init();
   createWindow();
+  
+  // Check for updates 5 seconds after launch (gives window time to open)
+  if (!app.isPackaged) {
+    console.log('Dev mode: skipping auto-update check');
+  } else {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(err => {
+        console.error('Auto-update check failed:', err);
+      });
+    }, 5000);
+  }
 });
 
 app.on('window-all-closed', async () => {
@@ -174,7 +231,20 @@ ipcMain.handle('sound:play', (_e, id) => {
   if (!sound) throw new Error('Sound not found');
   const filePath = soundboard.getFilePath(sound.filename);
   const vol = (settings.get('volume') || 100) / 100;
-  bot.playSound(filePath, vol);
+  const outputMode = settings.get('outputMode') || 'discord';
+  
+  if (outputMode === 'discord' || outputMode === 'both') {
+    bot.playSound(filePath, vol);
+  }
+  
+  return { filePath, volume: vol, mode: outputMode };
+});
+
+ipcMain.handle('sound:getFilePath', (_e, id) => {
+  const sounds = soundboard.getAllSounds();
+  const sound = sounds.find((s) => s.id === id);
+  if (!sound) throw new Error('Sound not found');
+  return soundboard.getFilePath(sound.filename);
 });
 
 ipcMain.handle('sound:import', async () => {
@@ -251,7 +321,10 @@ ipcMain.handle('youtube:probeDuration', async (_e, url) => {
 
 // --- Shell IPC ---
 ipcMain.handle('shell:openExternal', (_e, url) => {
-  const allowed = ['https://discord.com/developers/applications'];
+  const allowed = [
+    'https://discord.com/developers/applications',
+    'https://vb-audio.com/Voicemeeter/'
+  ];
   if (allowed.some((prefix) => url.startsWith(prefix))) {
     shell.openExternal(url);
   }
@@ -262,4 +335,29 @@ ipcMain.handle('settings:get', () => settings.load());
 
 ipcMain.handle('settings:save', (_e, data) => {
   return settings.save(data);
+});
+
+// --- Update IPC ---
+ipcMain.handle('update:check', async () => {
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return result;
+  } catch (err) {
+    console.error('Check for updates failed:', err);
+    throw err;
+  }
+});
+
+ipcMain.handle('update:download', async () => {
+  try {
+    await autoUpdater.downloadUpdate();
+    return { success: true };
+  } catch (err) {
+    console.error('Download update failed:', err);
+    throw err;
+  }
+});
+
+ipcMain.handle('update:install', () => {
+  autoUpdater.quitAndInstall(false, true);
 });

@@ -2,6 +2,8 @@
 let sounds = [];
 let contextTarget = null;
 let playingId = null;
+let audioElement = null;
+let availableDevices = [];
 
 // --- DOM refs ---
 const $ = (sel) => document.querySelector(sel);
@@ -29,6 +31,62 @@ $$('.tab').forEach((tab) => {
   });
 });
 
+// --- Audio Device Management ---
+async function enumerateDevices() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    availableDevices = devices.filter(d => d.kind === 'audiooutput');
+    updateDeviceList();
+    checkVoiceMeeterStatus();
+  } catch (err) {
+    console.error('Failed to enumerate devices:', err);
+  }
+}
+
+function updateDeviceList() {
+  const select = $('#setting-device');
+  const currentValue = select.value;
+  select.innerHTML = '<option value="default">System Default</option>';
+  
+  availableDevices.forEach(device => {
+    const option = document.createElement('option');
+    option.value = device.deviceId;
+    option.textContent = device.label || `Device ${device.deviceId.substring(0, 8)}...`;
+    select.appendChild(option);
+  });
+  
+  if (currentValue && Array.from(select.options).some(opt => opt.value === currentValue)) {
+    select.value = currentValue;
+  }
+}
+
+function checkVoiceMeeterStatus() {
+  const hasVoiceMeeter = availableDevices.some(device => 
+    device.label.toLowerCase().includes('voicemeeter')
+  );
+  
+  const statusText = $('#voicemeeter-status-text');
+  const downloadBtn = $('#voicemeeter-download-btn');
+  
+  if (hasVoiceMeeter) {
+    statusText.textContent = '✓ VoiceMeeter Detected';
+    statusText.style.color = 'var(--success)';
+    downloadBtn.classList.add('hidden');
+  } else {
+    statusText.textContent = '⚠ VoiceMeeter Not Detected';
+    statusText.style.color = 'var(--warning)';
+    downloadBtn.classList.remove('hidden');
+  }
+}
+
+$('#voicemeeter-download-btn').addEventListener('click', () => {
+  window.api.openExternal('https://vb-audio.com/Voicemeeter/banana.htm');
+});
+
+$('#refresh-devices-btn').addEventListener('click', async () => {
+  await enumerateDevices();
+});
+
 // --- Settings ---
 async function loadSettings() {
   const s = await window.api.settingsGet();
@@ -36,8 +94,13 @@ async function loadSettings() {
   $('#setting-ytdlp').value = s.ytdlpPath || 'yt-dlp';
   $('#setting-ffmpeg').value = s.ffmpegPath || 'ffmpeg';
   $('#setting-autoconnect').checked = s.autoConnect || false;
+  $('#setting-output-mode').value = s.outputMode || 'discord';
   volumeSlider.value = s.volume || 100;
   volumeValue.textContent = `${volumeSlider.value}%`;
+  
+  await enumerateDevices();
+  $('#setting-device').value = s.selectedDeviceId || 'default';
+  
   return s;
 }
 
@@ -48,6 +111,8 @@ $('#settings-save-btn').addEventListener('click', async () => {
     ffmpegPath: $('#setting-ffmpeg').value,
     autoConnect: $('#setting-autoconnect').checked,
     volume: parseInt(volumeSlider.value, 10),
+    outputMode: $('#setting-output-mode').value,
+    selectedDeviceId: $('#setting-device').value,
   };
   await window.api.settingsSave(data);
   const status = $('#settings-status');
@@ -213,21 +278,65 @@ function renderSoundGrid() {
   });
 }
 
-async function playSound(id) {
+async function playLocalAudio(filePath, volume, deviceId) {
   try {
-    // Auto-join last channel if not connected
-    const settings = await window.api.settingsGet();
-    if (settings.lastChannelId && leaveBtn.classList.contains('hidden')) {
+    if (!audioElement) {
+      audioElement = new Audio();
+      audioElement.addEventListener('ended', () => {
+        playingId = null;
+        renderSoundGrid();
+      });
+      audioElement.addEventListener('error', (e) => {
+        console.error('Audio playback error:', e);
+        playingId = null;
+        renderSoundGrid();
+      });
+    }
+    
+    audioElement.src = filePath;
+    audioElement.volume = Math.max(0, Math.min(1, volume));
+    
+    if (deviceId && deviceId !== 'default' && typeof audioElement.setSinkId === 'function') {
       try {
-        await window.api.botJoinChannel(settings.lastChannelId);
-        joinBtn.classList.add('hidden');
-        leaveBtn.classList.remove('hidden');
+        await audioElement.setSinkId(deviceId);
       } catch (err) {
-        alert(`Failed to auto-join channel: ${err.message}`);
-        return;
+        console.error('Failed to set output device:', err);
       }
     }
-    await window.api.soundPlay(id);
+    
+    await audioElement.play();
+  } catch (err) {
+    console.error('Local playback error:', err);
+    throw err;
+  }
+}
+
+async function playSound(id) {
+  try {
+    const settings = await window.api.settingsGet();
+    const outputMode = settings.outputMode || 'discord';
+    
+    if (outputMode === 'discord' || outputMode === 'both') {
+      if (settings.lastChannelId && leaveBtn.classList.contains('hidden')) {
+        try {
+          await window.api.botJoinChannel(settings.lastChannelId);
+          joinBtn.classList.add('hidden');
+          leaveBtn.classList.remove('hidden');
+        } catch (err) {
+          if (outputMode === 'discord') {
+            alert(`Failed to auto-join channel: ${err.message}`);
+            return;
+          }
+        }
+      }
+    }
+    
+    const result = await window.api.soundPlay(id);
+    
+    if ((outputMode === 'local' || outputMode === 'both') && result.filePath) {
+      await playLocalAudio(result.filePath, result.volume, settings.selectedDeviceId);
+    }
+    
     playingId = id;
     renderSoundGrid();
   } catch (err) {
@@ -572,6 +681,103 @@ $('#link-discord-dev').addEventListener('click', (e) => {
   e.preventDefault();
   window.api.openExternal('https://discord.com/developers/applications');
 });
+
+// --- Software Updates ---
+let updateDownloaded = false;
+
+$('#check-updates-btn').addEventListener('click', async () => {
+  $('#check-updates-btn').disabled = true;
+  $('#check-updates-btn').textContent = 'Checking...';
+  $('#update-info').classList.add('hidden');
+  
+  try {
+    await window.api.updateCheck();
+  } catch (err) {
+    $('#update-message').textContent = `Update check failed: ${err.message}`;
+    $('#update-info').classList.remove('hidden');
+    $('#update-actions').classList.add('hidden');
+  } finally {
+    $('#check-updates-btn').disabled = false;
+    $('#check-updates-btn').textContent = 'Check for Updates';
+  }
+});
+
+$('#download-update-btn').addEventListener('click', async () => {
+  $('#download-update-btn').disabled = true;
+  $('#download-update-btn').textContent = 'Downloading...';
+  $('#update-progress-container').classList.remove('hidden');
+  
+  try {
+    await window.api.updateDownload();
+  } catch (err) {
+    $('#update-message').textContent = `Download failed: ${err.message}`;
+    $('#update-progress-container').classList.add('hidden');
+    $('#download-update-btn').disabled = false;
+    $('#download-update-btn').textContent = 'Download Update';
+  }
+});
+
+$('#install-update-btn').addEventListener('click', () => {
+  window.api.updateInstall();
+});
+
+window.api.onUpdateChecking(() => {
+  console.log('Checking for updates...');
+});
+
+window.api.onUpdateAvailable((info) => {
+  console.log('Update available:', info.version);
+  $('#update-message').textContent = `Version ${info.version} is available! Current: ${info.currentVersion || 'unknown'}`;
+  $('#update-info').classList.remove('hidden');
+  $('#update-actions').classList.remove('hidden');
+  $('#download-update-btn').classList.remove('hidden');
+  $('#install-update-btn').classList.add('hidden');
+  updateDownloaded = false;
+});
+
+window.api.onUpdateNotAvailable((info) => {
+  console.log('No updates available');
+  $('#update-message').textContent = `You're running the latest version (${info.version})`;
+  $('#update-message').style.color = 'var(--success)';
+  $('#update-info').classList.remove('hidden');
+  $('#update-actions').classList.add('hidden');
+  setTimeout(() => {
+    $('#update-info').classList.add('hidden');
+  }, 3000);
+});
+
+window.api.onUpdateProgress((progress) => {
+  const percent = Math.round(progress.percent);
+  $('#update-progress-fill').style.width = `${percent}%`;
+  $('#update-progress-text').textContent = `${percent}% (${formatBytes(progress.transferred)} / ${formatBytes(progress.total)})`;
+});
+
+window.api.onUpdateDownloaded((info) => {
+  console.log('Update downloaded:', info.version);
+  updateDownloaded = true;
+  $('#update-message').textContent = `Version ${info.version} downloaded and ready to install!`;
+  $('#update-message').style.color = 'var(--success)';
+  $('#update-progress-container').classList.add('hidden');
+  $('#download-update-btn').classList.add('hidden');
+  $('#install-update-btn').classList.remove('hidden');
+});
+
+window.api.onUpdateError((message) => {
+  console.error('Update error:', message);
+  $('#update-message').textContent = `Update error: ${message}`;
+  $('#update-message').style.color = 'var(--danger)';
+  $('#update-info').classList.remove('hidden');
+  $('#update-actions').classList.add('hidden');
+  $('#update-progress-container').classList.add('hidden');
+});
+
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+}
 
 // --- Init ---
 (async () => {

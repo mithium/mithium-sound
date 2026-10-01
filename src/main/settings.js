@@ -12,6 +12,8 @@ const DEFAULTS = {
   ffmpegPath: '',
   ytdlpPath: '',
   volume: 100,
+  outputMode: 'discord',
+  selectedDeviceId: 'default',
 };
 
 let cache = null;
