@@ -4,6 +4,9 @@ let contextTarget = null;
 let playingId = null;
 let audioElement = null;
 let availableDevices = [];
+let armedClipId = null;
+let holdToPlayActive = false;
+let isKeyHeld = false;
 
 // --- DOM refs ---
 const $ = (sel) => document.querySelector(sel);
@@ -94,9 +97,12 @@ async function loadSettings() {
   $('#setting-ytdlp').value = s.ytdlpPath || 'yt-dlp';
   $('#setting-ffmpeg').value = s.ffmpegPath || 'ffmpeg';
   $('#setting-autoconnect').checked = s.autoConnect || false;
+  $('#setting-hold-to-play').checked = s.holdToPlayMode || false;
   $('#setting-output-mode').value = s.outputMode || 'discord';
   volumeSlider.value = s.volume || 100;
   volumeValue.textContent = `${volumeSlider.value}%`;
+  
+  holdToPlayActive = s.holdToPlayMode || false;
   
   await enumerateDevices();
   $('#setting-device').value = s.selectedDeviceId || 'default';
@@ -110,11 +116,13 @@ $('#settings-save-btn').addEventListener('click', async () => {
     ytdlpPath: $('#setting-ytdlp').value,
     ffmpegPath: $('#setting-ffmpeg').value,
     autoConnect: $('#setting-autoconnect').checked,
+    holdToPlayMode: $('#setting-hold-to-play').checked,
     volume: parseInt(volumeSlider.value, 10),
     outputMode: $('#setting-output-mode').value,
     selectedDeviceId: $('#setting-device').value,
   };
   await window.api.settingsSave(data);
+  holdToPlayActive = data.holdToPlayMode;
   const status = $('#settings-status');
   status.textContent = 'Settings saved!';
   status.className = 'success-text';
@@ -260,6 +268,7 @@ function renderSoundGrid() {
     const btn = document.createElement('button');
     btn.className = 'sound-btn';
     if (s.id === playingId) btn.classList.add('playing');
+    if (s.id === armedClipId) btn.classList.add('armed');
     btn.textContent = s.name;
     btn.dataset.id = s.id;
 
@@ -272,10 +281,49 @@ function renderSoundGrid() {
       badge.textContent = 'YT';
       wrapper.appendChild(badge);
     }
+    
+    if (holdToPlayActive) {
+      const armBtn = document.createElement('button');
+      armBtn.className = 'arm-btn';
+      armBtn.textContent = '🎯';
+      armBtn.title = 'Arm for hold-to-play (V/T keys)';
+      armBtn.dataset.id = s.id;
+      if (s.id === armedClipId) armBtn.classList.add('armed');
+      armBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleArmClip(s.id);
+      });
+      wrapper.appendChild(armBtn);
+    }
 
     wrapper.appendChild(btn);
     soundGrid.appendChild(wrapper);
   });
+}
+
+function toggleArmClip(id) {
+  if (armedClipId === id) {
+    armedClipId = null;
+  } else {
+    armedClipId = id;
+  }
+  renderSoundGrid();
+}
+
+async function stopAllPlayback() {
+  try {
+    await window.api.soundStop();
+  } catch (err) {
+    console.error('Failed to stop Discord bot playback:', err);
+  }
+  
+  if (audioElement) {
+    audioElement.pause();
+    audioElement.currentTime = 0;
+  }
+  
+  playingId = null;
+  renderSoundGrid();
 }
 
 async function playLocalAudio(filePath, volume, deviceId) {
@@ -801,3 +849,31 @@ function formatBytes(bytes) {
     }
   }
 })();
+
+// --- Keyboard Handlers for Hold-to-Play ---
+document.addEventListener('keydown', (e) => {
+  if (!holdToPlayActive || !armedClipId || isKeyHeld) return;
+  
+  const key = e.key.toLowerCase();
+  if (key === 'v' || key === 't') {
+    const target = e.target;
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+    
+    e.preventDefault();
+    isKeyHeld = true;
+    playSound(armedClipId);
+  }
+});
+
+document.addEventListener('keyup', async (e) => {
+  if (!holdToPlayActive || !armedClipId || !isKeyHeld) return;
+  
+  const key = e.key.toLowerCase();
+  if (key === 'v' || key === 't') {
+    e.preventDefault();
+    isKeyHeld = false;
+    await stopAllPlayback();
+    armedClipId = null;
+    renderSoundGrid();
+  }
+});

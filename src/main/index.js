@@ -240,6 +240,10 @@ ipcMain.handle('sound:play', (_e, id) => {
   return { filePath, volume: vol, mode: outputMode };
 });
 
+ipcMain.handle('sound:stop', () => {
+  bot.stopSound();
+});
+
 ipcMain.handle('sound:getFilePath', (_e, id) => {
   const sounds = soundboard.getAllSounds();
   const sound = sounds.find((s) => s.id === id);

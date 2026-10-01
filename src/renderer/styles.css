@@ -310,6 +310,43 @@ button:disabled {
   animation: pulse 1.2s ease-in-out infinite alternate;
 }
 
+.sound-btn.armed {
+  border-color: var(--warning);
+  background: rgba(249, 226, 175, 0.08);
+  box-shadow: 0 0 8px rgba(249, 226, 175, 0.2);
+}
+
+.arm-btn {
+  position: absolute;
+  top: 5px;
+  left: 7px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  transition: all 0.15s;
+}
+
+.arm-btn:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--warning);
+  transform: scale(1.1);
+}
+
+.arm-btn.armed {
+  background: var(--warning);
+  border-color: var(--warning);
+  box-shadow: 0 0 8px rgba(249, 226, 175, 0.4);
+}
+
 .source-badge {
   position: absolute;
   top: 5px;

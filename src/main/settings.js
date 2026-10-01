@@ -14,6 +14,7 @@ const DEFAULTS = {
   volume: 100,
   outputMode: 'discord',
   selectedDeviceId: 'default',
+  holdToPlayMode: false,
 };
 
 let cache = null;
