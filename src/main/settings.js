@@ -15,6 +15,9 @@ const DEFAULTS = {
   outputMode: 'discord',
   selectedDeviceId: 'default',
   holdToPlayMode: false,
+  remoteEnabled: false,
+  remotePort: 3000,
+  remoteAuthToken: '',
 };
 
 let cache = null;

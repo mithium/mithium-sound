@@ -47,6 +47,12 @@ contextBridge.exposeInMainWorld('api', {
   libraryGetInfo: () => ipcRenderer.invoke('library:getInfo'),
   libraryBackup: () => ipcRenderer.invoke('library:backup'),
   libraryRestore: () => ipcRenderer.invoke('library:restore'),
+  
+  // Remote Server
+  remoteStart: (opts) => ipcRenderer.invoke('remote:start', opts),
+  remoteStop: () => ipcRenderer.invoke('remote:stop'),
+  remoteStatus: () => ipcRenderer.invoke('remote:status'),
+  remoteGenerateQR: (url) => ipcRenderer.invoke('remote:generateQR', url),
 
   // Events from main
   onStatus: (cb) => {

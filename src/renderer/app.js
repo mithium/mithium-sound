@@ -191,6 +191,9 @@ async function loadSettings() {
   await enumerateDevices();
   $('#setting-device').value = s.selectedDeviceId || 'default';
   
+  // Load remote settings
+  await loadRemoteSettings(s);
+  
   return s;
 }
 
@@ -205,6 +208,9 @@ async function autoSaveSettings() {
     volume: parseInt(volumeSlider.value, 10),
     outputMode: $('#setting-output-mode').value,
     selectedDeviceId: $('#setting-device').value,
+    remoteEnabled: $('#setting-remote-enabled').checked,
+    remotePort: parseInt($('#setting-remote-port').value, 10),
+    remoteAuthToken: $('#setting-remote-auth').value.trim(),
   };
   
   await window.api.settingsSave(data);
@@ -287,6 +293,179 @@ $('#setting-hold-to-play').addEventListener('change', handleHoldToPlayChange);
 $('#setting-token').addEventListener('blur', autoSaveSettings);
 $('#setting-ytdlp').addEventListener('blur', autoSaveSettings);
 $('#setting-ffmpeg').addEventListener('blur', autoSaveSettings);
+
+// --- Remote Control Settings ---
+let remoteServerRunning = false;
+
+async function updateRemoteStatus() {
+  try {
+    const status = await window.api.remoteStatus();
+    remoteServerRunning = status.running;
+    
+    const statusText = $('#remote-status-text');
+    const urlsContainer = $('#remote-urls');
+    const urlList = $('#remote-url-list');
+    const qrContainer = $('#remote-qr');
+    
+    if (status.running) {
+      statusText.textContent = 'Running';
+      statusText.style.color = 'var(--success)';
+      
+      // Show URLs
+      urlList.innerHTML = '';
+      status.urls.forEach(url => {
+        const authToken = $('#setting-remote-auth').value.trim();
+        const fullUrl = authToken ? `${url}?token=${encodeURIComponent(authToken)}` : url;
+        
+        const urlDiv = document.createElement('div');
+        urlDiv.style.cssText = 'display: flex; align-items: center; gap: 8px; padding: 8px; background: var(--bg-primary); border-radius: 4px; font-family: monospace; font-size: 12px;';
+        
+        const urlText = document.createElement('span');
+        urlText.textContent = fullUrl;
+        urlText.style.flex = '1';
+        urlText.style.wordBreak = 'break-all';
+        
+        const copyBtn = document.createElement('button');
+        copyBtn.textContent = 'Copy';
+        copyBtn.style.cssText = 'padding: 4px 10px; font-size: 11px;';
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(fullUrl);
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => copyBtn.textContent = 'Copy', 2000);
+        });
+        
+        urlDiv.appendChild(urlText);
+        urlDiv.appendChild(copyBtn);
+        urlList.appendChild(urlDiv);
+      });
+      
+      urlsContainer.classList.remove('hidden');
+      
+      // Generate and show QR code for first URL
+      if (status.urls.length > 0) {
+        const authToken = $('#setting-remote-auth').value.trim();
+        const fullUrl = authToken ? `${status.urls[0]}?token=${encodeURIComponent(authToken)}` : status.urls[0];
+        
+        const qrResult = await window.api.remoteGenerateQR(fullUrl);
+        if (qrResult.qrCode) {
+          $('#remote-qr-img').src = qrResult.qrCode;
+          qrContainer.classList.remove('hidden');
+        }
+      }
+    } else {
+      statusText.textContent = 'Stopped';
+      statusText.style.color = 'var(--text-muted)';
+      urlsContainer.classList.add('hidden');
+      qrContainer.classList.add('hidden');
+    }
+  } catch (err) {
+    console.error('Failed to update remote status:', err);
+  }
+}
+
+async function handleRemoteEnabledChange() {
+  const enabled = $('#setting-remote-enabled').checked;
+  const configDiv = $('#remote-config');
+  
+  if (enabled) {
+    configDiv.classList.remove('hidden');
+    
+    // Start the server
+    const port = parseInt($('#setting-remote-port').value, 10);
+    const authToken = $('#setting-remote-auth').value.trim();
+    
+    try {
+      await window.api.remoteStart({
+        port,
+        authToken: authToken || null,
+      });
+      await updateRemoteStatus();
+    } catch (err) {
+      console.error('Failed to start remote server:', err);
+      await showModal({
+        title: 'Remote Server Error',
+        message: `Failed to start remote server: ${err.message}`,
+        confirmText: 'OK'
+      });
+      $('#setting-remote-enabled').checked = false;
+      configDiv.classList.add('hidden');
+    }
+  } else {
+    configDiv.classList.add('hidden');
+    
+    // Stop the server
+    try {
+      await window.api.remoteStop();
+      await updateRemoteStatus();
+    } catch (err) {
+      console.error('Failed to stop remote server:', err);
+    }
+  }
+  
+  await autoSaveSettings();
+}
+
+async function handleRemotePortChange() {
+  if (!remoteServerRunning) {
+    await autoSaveSettings();
+    return;
+  }
+  
+  // Restart server with new port
+  try {
+    await window.api.remoteStop();
+    const port = parseInt($('#setting-remote-port').value, 10);
+    const authToken = $('#setting-remote-auth').value.trim();
+    await window.api.remoteStart({
+      port,
+      authToken: authToken || null,
+    });
+    await updateRemoteStatus();
+    await autoSaveSettings();
+  } catch (err) {
+    console.error('Failed to restart remote server:', err);
+    await showModal({
+      title: 'Remote Server Error',
+      message: `Failed to restart remote server: ${err.message}`,
+      confirmText: 'OK'
+    });
+  }
+}
+
+async function handleRemoteAuthChange() {
+  await autoSaveSettings();
+  if (remoteServerRunning) {
+    await updateRemoteStatus(); // Update QR code with new token
+  }
+}
+
+$('#setting-remote-enabled').addEventListener('change', handleRemoteEnabledChange);
+$('#setting-remote-port').addEventListener('change', handleRemotePortChange);
+$('#setting-remote-auth').addEventListener('blur', handleRemoteAuthChange);
+
+// Load remote settings
+async function loadRemoteSettings(s) {
+  $('#setting-remote-enabled').checked = s.remoteEnabled || false;
+  $('#setting-remote-port').value = s.remotePort || 3000;
+  $('#setting-remote-auth').value = s.remoteAuthToken || '';
+  
+  if (s.remoteEnabled) {
+    $('#remote-config').classList.remove('hidden');
+    
+    // Auto-start remote server
+    try {
+      await window.api.remoteStart({
+        port: s.remotePort || 3000,
+        authToken: s.remoteAuthToken || null,
+      });
+      await updateRemoteStatus();
+    } catch (err) {
+      console.error('Failed to auto-start remote server:', err);
+      $('#setting-remote-enabled').checked = false;
+      $('#remote-config').classList.add('hidden');
+    }
+  }
+}
 
 // --- Volume ---
 volumeSlider.addEventListener('input', () => {

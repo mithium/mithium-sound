@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1e1e2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Mithium Sound Remote</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" type="image/png" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+</head>
+<body>
+  <!-- Header -->
+  <header id="header">
+    <h1>🎵 Mithium Sound</h1>
+    <div class="header-status">
+      <span id="connection-status" class="status-dot offline" title="Disconnected"></span>
+      <span id="connection-text">Connecting...</span>
+    </div>
+  </header>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <button id="stop-btn" class="stop-btn">⏹ Stop</button>
+    <div class="volume-control">
+      <label for="volume-slider">Vol</label>
+      <input type="range" id="volume-slider" min="0" max="150" value="100">
+      <span id="volume-value">100%</span>
+    </div>
+  </div>
+
+  <!-- Sound Grid -->
+  <main id="main">
+    <div id="sound-grid" class="sound-grid">
+      <p class="loading-message">Loading sounds...</p>
+    </div>
+  </main>
+
+  <!-- Error Toast -->
+  <div id="error-toast" class="error-toast hidden">
+    <span id="error-message"></span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
