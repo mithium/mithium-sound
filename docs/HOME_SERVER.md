@@ -36,6 +36,8 @@ The Discord bot token is never placed on this wire. The client also refuses to s
 
 YouTube URL, source type, per-clip volume, hotkey, and the on-screen clip order stay on this PC. They are not library fields.
 
+Openverse attribution stays on this PC the same way. A recorded take, an insert edit, and an imported Openverse sound are ordinary local clips: they upload as audio plus name, group, and trim. The wire is unchanged. Creator, license, license URL, source URL, and the attribution sentence are columns on the local sound row. They are not sent. Applying a server update does not clear them.
+
 ## Sync rule
 
 Identity is the clip or group UUID, not the local SQLite row id.

@@ -75,8 +75,11 @@ If update available:
 ### Soundboard Tab
 - Grid of sound buttons
 - Import sounds from files
+- Record a microphone take (device picker, live waveform, saved as a normal clip)
+- Insert another clip before, at a point in, or after a take, then render a new clip with the bundled FFmpeg
+- Search Openverse sound effects, preview, and import with the license and attribution kept on the clip
 - Extract clips from YouTube
-- Right-click to rename/delete
+- Right-click to rename, edit inserts, or delete
 - Visual "playing" animation
 - Volume slider (0-150%)
 

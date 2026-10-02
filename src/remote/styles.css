@@ -480,6 +480,176 @@ body {
   display: none;
 }
 
+#remote-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px 0;
+  background: var(--bg-secondary);
+}
+
+.remote-tab {
+  flex: 1;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 10px 8px;
+  font-weight: 700;
+}
+
+.remote-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.remote-panel {
+  padding: 16px;
+}
+
+.remote-panel h2 {
+  font-size: 16px;
+  margin: 16px 0 8px;
+}
+
+.field-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 10px 0 4px;
+}
+
+.remote-panel input,
+.remote-panel select,
+.studio-inline input {
+  width: 100%;
+  background: var(--bg-surface);
+  color: var(--text);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  font-size: 16px;
+}
+
+.studio-help {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  margin-bottom: 10px;
+}
+
+.studio-inline {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+  flex-wrap: wrap;
+}
+
+.studio-inline button,
+.remote-panel > button {
+  flex: 1;
+}
+
+.wave-canvas {
+  width: 100%;
+  height: 140px;
+  background: #181825;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: block;
+}
+
+.insert-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.insert-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  background: var(--bg-surface);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.secure-banner {
+  margin: 10px 16px 0;
+  padding: 10px 12px;
+  background: rgba(249, 226, 175, 0.12);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.secure-banner a {
+  color: var(--text);
+}
+
+.ov-card {
+  background: var(--bg-surface);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.ov-card h3 {
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.ov-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-bottom: 8px;
+}
+
+.clip-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.clip-actions .load-btn,
+.clip-actions .edit-btn {
+  margin-top: 6px;
+}
+
+.edit-btn {
+  width: 100%;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sound-btn.has-meta {
+  flex-direction: column;
+  gap: 4px;
+}
+
+.clip-license {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.error-text {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
 /* Utilities */
 .hidden {
   display: none !important;

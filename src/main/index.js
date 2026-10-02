@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -62,6 +62,7 @@ const settings = require('./settings');
 const remote = require('./remote');
 const homeserver = require('./homeserver');
 const loadedClip = require('./loadedClip');
+const studio = require('./studioRoutes');
 const { createWinKeyHold } = require('./winKeyHold');
 const { classifyGlobalEvent } = require('./loadedClipControl');
 
@@ -394,6 +395,16 @@ function libraryMutated() {
 }
 
 app.whenReady().then(async () => {
+  const allowPermission = (permission) => permission === 'media'
+    || permission === 'audioCapture'
+    || permission === 'mediaKeySystem'
+    || permission === 'speaker-selection'
+    || permission === 'clipboard-read'
+    || permission === 'clipboard-sanitized-write';
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowPermission(permission));
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(allowPermission(permission));
+  });
   await soundboard.init();
   initLoadedClip();
   homeserver.onStatus((state) => {
@@ -539,6 +550,38 @@ ipcMain.handle('sound:assignToGroup', (_e, soundId, groupId) => {
   libraryMutated();
 });
 
+ipcMain.handle('sound:saveRecording', async (_e, payload) => {
+  const sound = await studio.saveRecording(payload || {});
+  libraryMutated();
+  return sound;
+});
+
+ipcMain.handle('sound:read', (_e, id) => {
+  const audio = studio.readClip(id);
+  return { mime: audio.mime, bytes: audio.bytes };
+});
+
+ipcMain.handle('clip:probe', (_e, id) => studio.probeClip(id));
+
+ipcMain.handle('clip:render', async (_e, plan) => {
+  const sound = await studio.renderEdit(plan || {});
+  libraryMutated();
+  return sound;
+});
+
+ipcMain.handle('openverse:search', (_e, query, page) => studio.searchOpenverse(query, page));
+
+ipcMain.handle('openverse:preview', async (_e, id) => {
+  const preview = await studio.previewOpenverse(id);
+  return { mime: preview.mime, bytes: preview.bytes, result: preview.result };
+});
+
+ipcMain.handle('openverse:import', async (_e, payload) => {
+  const sound = await studio.importOpenverse(payload || {});
+  libraryMutated();
+  return sound;
+});
+
 // --- Group IPC ---
 ipcMain.handle('group:getAll', () => soundboard.getAllGroups());
 
@@ -618,7 +661,13 @@ ipcMain.handle('shell:openExternal', (_e, url) => {
     'https://discord.com/developers/applications',
     'https://vb-audio.com/Voicemeeter/'
   ];
-  if (allowed.some((prefix) => url.startsWith(prefix))) {
+  let httpsOk = false;
+  try {
+    httpsOk = new URL(url).protocol === 'https:';
+  } catch {
+    httpsOk = false;
+  }
+  if (httpsOk || allowed.some((prefix) => String(url || '').startsWith(prefix))) {
     shell.openExternal(url);
   }
 });
@@ -694,7 +743,10 @@ ipcMain.handle('library:restore', async () => {
 // --- Remote Server IPC ---
 ipcMain.handle('remote:start', async (_e, opts) => {
   try {
-    remote.startServer(opts);
+    await remote.startServer({
+      ...(opts || {}),
+      onLibraryChange: () => libraryMutated(),
+    });
     return { success: true, ...remote.getStatus() };
   } catch (err) {
     console.error('Failed to start remote server:', err);

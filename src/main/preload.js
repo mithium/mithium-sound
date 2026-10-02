@@ -19,6 +19,13 @@ contextBridge.exposeInMainWorld('api', {
   soundDelete: (id) => ipcRenderer.invoke('sound:delete', id),
   soundRename: (id, name) => ipcRenderer.invoke('sound:rename', id, name),
   soundAssignToGroup: (soundId, groupId) => ipcRenderer.invoke('sound:assignToGroup', soundId, groupId),
+  soundSaveRecording: (payload) => ipcRenderer.invoke('sound:saveRecording', payload),
+  soundRead: (id) => ipcRenderer.invoke('sound:read', id),
+  clipProbe: (id) => ipcRenderer.invoke('clip:probe', id),
+  clipRender: (plan) => ipcRenderer.invoke('clip:render', plan),
+  openverseSearch: (query, page) => ipcRenderer.invoke('openverse:search', query, page),
+  openversePreview: (id) => ipcRenderer.invoke('openverse:preview', id),
+  openverseImport: (payload) => ipcRenderer.invoke('openverse:import', payload),
 
   // Groups
   groupGetAll: () => ipcRenderer.invoke('group:getAll'),

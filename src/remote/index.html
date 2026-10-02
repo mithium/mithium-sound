@@ -48,6 +48,66 @@
     <p id="loaded-hint" class="loaded-hint">On: one press of V or T on the PC plays this clip and holds that key until it ends. Off: V and T play the clip without holding a key.</p>
   </section>
 
+  <nav id="remote-tabs">
+    <button type="button" class="remote-tab active" data-panel="board">Board</button>
+    <button type="button" class="remote-tab" data-panel="record">Record</button>
+    <button type="button" class="remote-tab" data-panel="openverse">Openverse</button>
+  </nav>
+  <div id="secure-banner" class="secure-banner hidden"></div>
+
+  <section id="record-panel" class="remote-panel hidden">
+    <p class="studio-help">Record with this phone’s microphone. No device picker. The take is saved on the Windows soundboard.</p>
+    <canvas id="rec-wave" class="wave-canvas" height="140" aria-label="Recording waveform"></canvas>
+    <p id="rec-marker" class="studio-help">Tap the waveform to choose an insert point.</p>
+    <div class="studio-inline">
+      <button id="rec-start" type="button">Record</button>
+      <button id="rec-stop" type="button" disabled>Stop</button>
+      <span id="rec-status">Ready</span>
+    </div>
+    <label class="field-label" for="rec-name">Take name</label>
+    <input type="text" id="rec-name" placeholder="Voice take" maxlength="80">
+    <label class="field-label" for="rec-group">Group</label>
+    <select id="rec-group"></select>
+    <button id="rec-save" type="button" disabled>Save take</button>
+    <p id="rec-error" class="error-text hidden"></p>
+    <h2>Insert edit</h2>
+    <p class="studio-help">Place a clip already on the Windows board before this take, after it, or at the marker. Render saves a new clip on the PC.</p>
+    <label class="field-label" for="edit-base">Clip being edited</label>
+    <select id="edit-base"></select>
+    <label class="field-label" for="edit-insert">Insert clip</label>
+    <select id="edit-insert"></select>
+    <div class="studio-inline">
+      <button id="edit-before" type="button">Before</button>
+      <button id="edit-at" type="button">At point</button>
+      <button id="edit-after" type="button">After</button>
+    </div>
+    <ol id="edit-order" class="insert-list"></ol>
+    <label class="field-label" for="edit-name">New clip name</label>
+    <input type="text" id="edit-name" placeholder="Edited take" maxlength="80">
+    <label class="field-label" for="edit-group">Group</label>
+    <select id="edit-group"></select>
+    <button id="edit-render" type="button" disabled>Render new clip</button>
+    <p id="edit-error" class="error-text hidden"></p>
+  </section>
+
+  <section id="openverse-panel" class="remote-panel hidden">
+    <p class="studio-help">Search Openverse. This needs the Windows PC to be online. The Discord bot token is never sent.</p>
+    <div class="studio-inline">
+      <input type="text" id="ov-query" placeholder="door slam, applause" maxlength="200">
+      <button id="ov-search" type="button">Search</button>
+    </div>
+    <label class="field-label" for="ov-group">Add to group</label>
+    <select id="ov-group"></select>
+    <p id="ov-note" class="studio-help"></p>
+    <p id="ov-error" class="error-text hidden"></p>
+    <div id="ov-results" class="ov-results"></div>
+    <div class="studio-inline">
+      <button id="ov-prev" type="button" class="hidden">Previous</button>
+      <button id="ov-next" type="button" class="hidden">Next</button>
+    </div>
+    <audio id="ov-player" class="hidden" controls></audio>
+  </section>
+
   <!-- Sound Grid -->
   <main id="main">
     <div id="sound-grid" class="sound-grid">
@@ -60,6 +120,9 @@
     <span id="error-message"></span>
   </div>
 
+  <script src="/shared/editPlan.js"></script>
+  <script src="/shared/waveform.js"></script>
   <script src="app.js"></script>
+  <script src="studio.js"></script>
 </body>
 </html>

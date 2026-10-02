@@ -1,19 +1,26 @@
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
+const https = require('https');
 const path = require('path');
 const os = require('os');
 const QRCode = require('qrcode');
 const soundboard = require('./soundboard');
 const settings = require('./settings');
 const loadedClip = require('./loadedClip');
+const studio = require('./studioRoutes');
+const remoteCert = require('./remoteCert');
 
 let httpServer = null;
+let httpsServer = null;
 let expressApp = null;
-let wss = null;
+const socketServers = [];
+const sockets = new Set();
 let isRunning = false;
 let port = 3000;
+let securePort = null;
 let authToken = null;
+let onLibraryChange = null;
 
 // Get all LAN IP addresses
 function getLanIPs() {
@@ -34,14 +41,17 @@ function getLanIPs() {
 
 // Broadcast update to all connected WebSocket clients
 function broadcastUpdate(type, data) {
-  if (!wss) return;
-  
   const message = JSON.stringify({ type, data });
-  wss.clients.forEach((client) => {
-    if (client.readyState === 1) { // WebSocket.OPEN
+  sockets.forEach((client) => {
+    if (client.readyState === 1) {
       client.send(message);
     }
   });
+}
+
+function changedLibrary() {
+  if (typeof onLibraryChange === 'function') onLibraryChange();
+  else notifyLibraryUpdate();
 }
 
 // Simple auth middleware (optional PIN protection)
@@ -58,19 +68,27 @@ function authMiddleware(req, res, next) {
   res.status(401).json({ error: 'Unauthorized' });
 }
 
-function startServer(opts = {}) {
+function sendApiError(res, err) {
+  const status = err && err.status ? err.status : 500;
+  res.status(status).json({ error: err.message || 'Request failed', offline: !!(err && err.offline) });
+}
+
+async function startServer(opts = {}) {
   if (isRunning) {
     throw new Error('Remote server is already running');
   }
   
   port = opts.port || 3000;
   authToken = opts.authToken || null;
+  onLibraryChange = opts.onLibraryChange || null;
+  securePort = null;
   
   expressApp = express();
-  expressApp.use(express.json());
+  expressApp.use(express.json({ limit: '1mb' }));
   
   // Serve static files for the web UI
   const remotePath = path.join(__dirname, '..', 'remote');
+  expressApp.use('/shared', express.static(path.join(__dirname, '..', 'shared')));
   expressApp.use(express.static(remotePath));
   
   // API: Get library (groups + sounds)
@@ -163,6 +181,7 @@ function startServer(opts = {}) {
       res.json({
         volume,
         serverVersion: require('../../package.json').version,
+        secureUrls: securePort ? getSecureURLs() : [],
         ...loadedClip.getPublicState(),
       });
     } catch (err) {
@@ -210,17 +229,131 @@ function startServer(opts = {}) {
       res.status(err.status || 500).json({ error: err.message });
     }
   });
+
+  expressApp.post('/api/recordings', authMiddleware, express.raw({ type: () => true, limit: '40mb' }), async (req, res) => {
+    try {
+      const sound = await studio.saveRecording({
+        name: req.query.name,
+        groupId: req.query.groupId,
+        mime: req.headers['content-type'],
+        bytes: req.body,
+        durationMs: req.query.durationMs,
+      });
+      changedLibrary();
+      res.status(201).json({ success: true, sound });
+    } catch (err) {
+      console.error('API error (recording):', err);
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.get('/api/sounds/:id/audio', authMiddleware, (req, res) => {
+    try {
+      const audio = studio.readClip(req.params.id);
+      res.setHeader('Content-Type', audio.mime);
+      res.setHeader('Content-Length', audio.bytes.length);
+      res.send(audio.bytes);
+    } catch (err) {
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.get('/api/sounds/:id/probe', authMiddleware, async (req, res) => {
+    try {
+      res.json(await studio.probeClip(req.params.id));
+    } catch (err) {
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.post('/api/edits', authMiddleware, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const sound = await studio.renderEdit({
+        name: body.name,
+        groupId: body.groupId,
+        baseId: body.baseId,
+        inserts: body.inserts,
+      });
+      changedLibrary();
+      res.status(201).json({ success: true, sound });
+    } catch (err) {
+      console.error('API error (edit):', err);
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.get('/api/openverse/search', authMiddleware, async (req, res) => {
+    try {
+      res.json(await studio.searchOpenverse(req.query.q, req.query.page));
+    } catch (err) {
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.get('/api/openverse/preview/:id', authMiddleware, async (req, res) => {
+    try {
+      const preview = await studio.previewOpenverse(req.params.id);
+      res.setHeader('Content-Type', preview.mime || 'audio/mpeg');
+      res.send(preview.bytes);
+    } catch (err) {
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.post('/api/openverse/import', authMiddleware, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const sound = await studio.importOpenverse({
+        id: body.id,
+        name: body.name,
+        groupId: body.groupId,
+      });
+      changedLibrary();
+      res.status(201).json({ success: true, sound });
+    } catch (err) {
+      console.error('API error (openverse import):', err);
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.use((err, _req, res, next) => {
+    if (err && err.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'Recording is too large' });
+    }
+    return next(err);
+  });
   
   // Create HTTP server
   httpServer = http.createServer(expressApp);
-  
-  // WebSocket server for live updates
-  wss = new WebSocketServer({ server: httpServer, path: '/ws' });
-  
+  attachSockets(httpServer);
+  await listenOn(httpServer, port);
+  isRunning = true;
+  console.log(`Remote server started on port ${port}`);
+  console.log('Access URLs:', getAccessURLs());
+  await startSecureServer();
+}
+
+function listenOn(server, listenPort) {
+  return new Promise((resolve, reject) => {
+    const onError = (err) => {
+      server.off('error', onError);
+      reject(err);
+    };
+    server.once('error', onError);
+    server.listen(listenPort, '0.0.0.0', () => {
+      server.off('error', onError);
+      resolve();
+    });
+  });
+}
+
+function attachSockets(server) {
+  const wss = new WebSocketServer({ server, path: '/ws' });
+  socketServers.push(wss);
   wss.on('connection', (ws, req) => {
+    sockets.add(ws);
     console.log('WebSocket client connected from', req.socket.remoteAddress);
-    
-    // Send initial library state
     try {
       const sounds = soundboard.getAllSounds();
       const groups = soundboard.getAllGroups();
@@ -228,47 +361,73 @@ function startServer(opts = {}) {
       const clip = loadedClip.getPublicState();
       ws.send(JSON.stringify({
         type: 'init',
-        data: { sounds, groups, volume, ...clip },
+        data: { sounds, groups, volume, secureUrls: securePort ? getSecureURLs() : [], ...clip },
       }));
     } catch (err) {
       console.error('WebSocket init error:', err);
     }
-    
     ws.on('error', (err) => {
       console.error('WebSocket error:', err);
     });
-    
     ws.on('close', () => {
+      sockets.delete(ws);
       console.log('WebSocket client disconnected');
     });
   });
-  
-  // Start listening
-  httpServer.listen(port, '0.0.0.0', () => {
-    isRunning = true;
-    console.log(`Remote server started on port ${port}`);
-    console.log('Access URLs:', getAccessURLs());
-  });
+}
+
+async function startSecureServer() {
+  const nextPort = Number(port) + 1;
+  if (!Number.isInteger(nextPort) || nextPort > 65535) return;
+  let credentials;
+  try {
+    const { app } = require('electron');
+    const dir = path.join(app.getPath('userData'), 'remote-tls');
+    credentials = remoteCert.loadOrCreate(dir, getLanIPs());
+  } catch (err) {
+    console.error('Remote HTTPS certificate failed:', err.message);
+    return;
+  }
+  const server = https.createServer(credentials, expressApp);
+  attachSockets(server);
+  try {
+    await listenOn(server, nextPort);
+  } catch (err) {
+    console.error('Remote HTTPS server failed:', err.message);
+    try { server.close(); } catch { /* not listening */ }
+    return;
+  }
+  httpsServer = server;
+  securePort = nextPort;
+  console.log('Remote HTTPS (phone microphone) on port', nextPort);
 }
 
 function stopServer() {
-  if (!isRunning) {
+  if (!isRunning && !httpServer) {
     return;
   }
   
-  if (wss) {
-    wss.clients.forEach((client) => client.close());
-    wss.close();
-    wss = null;
-  }
+  sockets.forEach((client) => {
+    try { client.close(); } catch { /* already closed */ }
+  });
+  sockets.clear();
+  socketServers.forEach((wss) => {
+    try { wss.close(); } catch { /* already closed */ }
+  });
+  socketServers.length = 0;
   
   if (httpServer) {
     httpServer.close();
     httpServer = null;
   }
+  if (httpsServer) {
+    httpsServer.close();
+    httpsServer = null;
+  }
   
   expressApp = null;
   isRunning = false;
+  securePort = null;
   console.log('Remote server stopped');
 }
 
@@ -276,9 +435,16 @@ function getStatus() {
   return {
     running: isRunning,
     port,
+    securePort,
     urls: isRunning ? getAccessURLs() : [],
+    secureUrls: isRunning && securePort ? getSecureURLs() : [],
     hasAuth: !!authToken,
   };
+}
+
+function getSecureURLs() {
+  if (!securePort) return [];
+  return getLanIPs().map((ip) => `https://${ip}:${securePort}`);
 }
 
 function getAccessURLs() {

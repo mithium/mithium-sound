@@ -7,6 +7,7 @@
     "start": "electron .",
     "test:home-server": "node scripts/test-home-server-sync.js",
     "test:loaded-clip": "node scripts/test-loaded-clip.js",
+    "test:studio": "node scripts/test-studio.js",
     "postinstall": "node scripts/patch-voice.js && node scripts/extract-ffmpeg.js",
     "build": "node scripts/patch-voice.js && node scripts/extract-ffmpeg.js && electron-builder --win nsis zip"
   },

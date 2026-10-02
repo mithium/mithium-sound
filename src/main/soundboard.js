@@ -75,6 +75,11 @@ function migrateSyncColumns() {
   addColumn('sounds', 'audio_path', 'audio_path TEXT');
   addColumn('sounds', 'remote_hash', 'remote_hash TEXT');
   addColumn('sounds', 'server_revision', 'server_revision INTEGER');
+  addColumn('sounds', 'attribution_creator', 'attribution_creator TEXT');
+  addColumn('sounds', 'attribution_license', 'attribution_license TEXT');
+  addColumn('sounds', 'attribution_license_url', 'attribution_license_url TEXT');
+  addColumn('sounds', 'attribution_source_url', 'attribution_source_url TEXT');
+  addColumn('sounds', 'attribution_text', 'attribution_text TEXT');
 
   addColumn('groups', 'sync_id', 'sync_id TEXT');
   addColumn('groups', 'updated_at', 'updated_at TEXT');
@@ -165,26 +170,51 @@ function getAllSounds() {
   return queryAll('SELECT * FROM sounds WHERE deleted_at IS NULL ORDER BY position, id');
 }
 
-function addSound({ name, filename, sourceType = 'local', youtubeUrl, youtubeStart, youtubeEnd }) {
+function clipName(name, fallback) {
+  const text = String(name || '').trim().slice(0, 80);
+  return text || fallback || 'Clip';
+}
+
+function addSound({
+  name,
+  filename,
+  sourceType = 'local',
+  youtubeUrl,
+  youtubeStart,
+  youtubeEnd,
+  groupId = null,
+  durationMs = null,
+  mimeType = null,
+  attribution = null,
+}) {
   const posStmt = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM sounds');
   posStmt.step();
   const nextPos = posStmt.getAsObject().next;
   posStmt.free();
 
   let contentHash = null;
+  let sizeBytes = null;
   try {
     const filePath = getFilePath(filename);
-    if (fs.existsSync(filePath)) contentHash = hashBuffer(fs.readFileSync(filePath));
+    if (fs.existsSync(filePath)) {
+      const bytes = fs.readFileSync(filePath);
+      contentHash = hashBuffer(bytes);
+      sizeBytes = bytes.length;
+    }
   } catch (err) {
     console.error('Failed to hash sound file:', err.message);
   }
 
+  const attr = attribution || {};
   db.run(
     `INSERT INTO sounds (
-       name, filename, source_type, youtube_url, youtube_start, youtube_end, position,
-       sync_id, updated_at, content_hash, dirty, synced
+       name, filename, source_type, youtube_url, youtube_start, youtube_end, position, group_id,
+       sync_id, updated_at, content_hash, dirty, synced,
+       duration_ms, mime_type, size_bytes,
+       attribution_creator, attribution_license, attribution_license_url,
+       attribution_source_url, attribution_text
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       filename,
@@ -193,14 +223,73 @@ function addSound({ name, filename, sourceType = 'local', youtubeUrl, youtubeSta
       youtubeStart || null,
       youtubeEnd || null,
       nextPos,
+      groupId || null,
       crypto.randomUUID(),
       nowIso(),
       contentHash,
+      durationMs == null ? null : Math.round(Number(durationMs)),
+      mimeType || null,
+      sizeBytes,
+      attr.creator || null,
+      attr.license || null,
+      attr.licenseUrl || null,
+      attr.sourceUrl || null,
+      attr.text || null,
     ]
   );
   const id = db.exec('SELECT last_insert_rowid() AS id')[0].values[0][0];
   persist();
   return { id };
+}
+
+function getSoundById(id) {
+  return queryOne('SELECT * FROM sounds WHERE id = ? AND deleted_at IS NULL', [id]);
+}
+
+function slugName(name) {
+  const slug = String(name || 'clip').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  return slug || 'clip';
+}
+
+function normalizeExt(extension) {
+  const ext = String(extension || '').toLowerCase();
+  const withDot = ext.startsWith('.') ? ext : `.${ext}`;
+  const allowed = ['.mp3', '.wav', '.ogg', '.flac', '.webm', '.m4a', '.aac'];
+  return allowed.includes(withDot) ? withDot : '.webm';
+}
+
+function addAudioClip({ name, bytes, extension, sourceType, groupId, durationMs, mimeType, attribution }) {
+  const buffer = Buffer.from(bytes || []);
+  if (!buffer.length) throw new Error('Audio file was empty');
+  if (buffer.length > 80 * 1024 * 1024) throw new Error('Audio file is too large');
+  const filename = `${Date.now()}-${crypto.randomBytes(3).toString('hex')}-${slugName(name)}${normalizeExt(extension)}`;
+  fs.writeFileSync(getFilePath(filename), buffer);
+  const { id } = addSound({
+    name: clipName(name, 'Clip'),
+    filename,
+    sourceType: sourceType || 'local',
+    groupId: groupId || null,
+    durationMs,
+    mimeType,
+    attribution,
+  });
+  return getSoundById(id);
+}
+
+const MAX_EDIT_BYTES = 80 * 1024 * 1024;
+
+function readSoundBytes(id) {
+  const sound = getSoundById(id);
+  if (!sound) return null;
+  const filePath = safeSoundPath(sound.filename);
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  const bytes = fs.readFileSync(filePath);
+  if (bytes.length > MAX_EDIT_BYTES) {
+    const error = new Error('Clip is too large to load');
+    error.status = 413;
+    throw error;
+  }
+  return { sound, bytes, filePath };
 }
 
 function deleteSound(id) {
@@ -716,7 +805,10 @@ function markSyncAcknowledged(kind, syncId, baseUpdatedAt) {
 module.exports = { 
   init, 
   getAllSounds, 
+  getSoundById,
   addSound, 
+  addAudioClip,
+  readSoundBytes,
   deleteSound, 
   renameSound, 
   reorderSound, 
