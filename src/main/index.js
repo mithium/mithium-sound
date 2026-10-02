@@ -59,6 +59,7 @@ const bot = require('./bot');
 const soundboard = require('./soundboard');
 const youtube = require('./youtube');
 const settings = require('./settings');
+const remote = require('./remote');
 
 let mainWindow = null;
 
@@ -323,32 +324,43 @@ ipcMain.handle('sound:import', async () => {
     const { id } = soundboard.addSound({ name: baseName, filename, sourceType: 'local' });
     imported.push({ id, name: baseName, filename });
   }
+  
+  remote.notifyLibraryUpdate();
   return imported;
 });
 
 ipcMain.handle('sound:delete', (_e, id) => {
   soundboard.deleteSound(id);
+  remote.notifyLibraryUpdate();
 });
 
 ipcMain.handle('sound:rename', (_e, id, name) => {
   soundboard.renameSound(id, name);
+  remote.notifyLibraryUpdate();
 });
 
 ipcMain.handle('sound:assignToGroup', (_e, soundId, groupId) => {
   soundboard.assignSoundToGroup(soundId, groupId);
+  remote.notifyLibraryUpdate();
 });
 
 // --- Group IPC ---
 ipcMain.handle('group:getAll', () => soundboard.getAllGroups());
 
-ipcMain.handle('group:create', (_e, name) => soundboard.createGroup(name));
+ipcMain.handle('group:create', (_e, name) => {
+  const result = soundboard.createGroup(name);
+  remote.notifyLibraryUpdate();
+  return result;
+});
 
 ipcMain.handle('group:rename', (_e, id, name) => {
   soundboard.renameGroup(id, name);
+  remote.notifyLibraryUpdate();
 });
 
 ipcMain.handle('group:delete', (_e, id) => {
   soundboard.deleteGroup(id);
+  remote.notifyLibraryUpdate();
 });
 
 ipcMain.handle('group:toggleCollapsed', (_e, id) => {
@@ -393,6 +405,7 @@ ipcMain.handle('youtube:extract', async (_e, opts) => {
     youtubeEnd: end,
   });
 
+  remote.notifyLibraryUpdate();
   return { id, name, filename };
 });
 
@@ -480,4 +493,39 @@ ipcMain.handle('library:restore', async () => {
   const backupPath = result.filePaths[0];
   const restoreResult = await soundboard.restoreLibrary(backupPath);
   return { success: true, ...restoreResult };
+});
+
+// --- Remote Server IPC ---
+ipcMain.handle('remote:start', async (_e, opts) => {
+  try {
+    remote.startServer(opts);
+    return { success: true, ...remote.getStatus() };
+  } catch (err) {
+    console.error('Failed to start remote server:', err);
+    throw err;
+  }
+});
+
+ipcMain.handle('remote:stop', () => {
+  try {
+    remote.stopServer();
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to stop remote server:', err);
+    throw err;
+  }
+});
+
+ipcMain.handle('remote:status', () => {
+  return remote.getStatus();
+});
+
+ipcMain.handle('remote:generateQR', async (_e, url) => {
+  try {
+    const qrCode = await remote.generateQRCode(url);
+    return { qrCode };
+  } catch (err) {
+    console.error('Failed to generate QR code:', err);
+    throw err;
+  }
 });
