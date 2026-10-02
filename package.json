@@ -1,10 +1,6 @@
 {
   "name": "mithium-sound",
-<<<<<<< HEAD
-  "version": "1.8.2",
-=======
   "version": "1.8.3",
->>>>>>> 836af41 (Update app icon to new circular design and bump to 1.8.3)
   "description": "Discord soundboard desktop app",
   "main": "src/main/index.js",
   "scripts": {
