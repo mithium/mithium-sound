@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mithium-sound-remote-v1';
+const CACHE_NAME = 'mithium-sound-remote-v2';
 const urlsToCache = [
   '/',
   '/index.html',
@@ -22,34 +22,18 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
+
   event.respondWith(
-    caches.match(event.request)
+    fetch(event.request)
       .then((response) => {
-        // Cache hit - return response
-        if (response) {
-          return response;
+        if (response && response.status === 200 && response.type === 'basic' && !event.request.url.includes('/api/')) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         }
-        
-        // Clone the request
-        const fetchRequest = event.request.clone();
-        
-        return fetch(fetchRequest).then((response) => {
-          // Check if valid response
-          if (!response || response.status !== 200 || response.type !== 'basic') {
-            return response;
-          }
-          
-          // Clone the response
-          const responseToCache = response.clone();
-          
-          caches.open(CACHE_NAME)
-            .then((cache) => {
-              cache.put(event.request, responseToCache);
-            });
-          
-          return response;
-        });
+        return response;
       })
+      .catch(() => caches.match(event.request))
   );
 });
 

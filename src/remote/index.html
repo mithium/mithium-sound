@@ -32,6 +32,22 @@
     </div>
   </div>
 
+  <section id="loaded-panel" class="loaded-panel">
+    <div class="loaded-panel-top">
+      <div class="loaded-panel-copy">
+        <span class="loaded-kicker">Active loaded clip</span>
+        <strong id="loaded-name">None — tap Load on a clip</strong>
+        <span id="loaded-hold-state" class="loaded-hold-state">Holding nothing</span>
+      </div>
+      <button id="loaded-clear" class="loaded-clear" type="button" disabled>Clear</button>
+    </div>
+    <label class="auto-hold-toggle" for="auto-hold-toggle">
+      <input type="checkbox" id="auto-hold-toggle" checked>
+      <span>V/T auto-hold</span>
+    </label>
+    <p id="loaded-hint" class="loaded-hint">On: one press of V or T on the PC plays this clip and holds that key until it ends. Off: V and T play the clip without holding a key.</p>
+  </section>
+
   <!-- Sound Grid -->
   <main id="main">
     <div id="sound-grid" class="sound-grid">

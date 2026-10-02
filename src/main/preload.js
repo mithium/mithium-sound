@@ -91,6 +91,23 @@ contextBridge.exposeInMainWorld('api', {
   onGlobalHotkeyKeyup: (cb) => {
     ipcRenderer.on('global-hotkey:keyup', (_e, key) => cb(key));
   },
+
+  // Phone-loaded clip. V/T play it; hard stops release a simulated key.
+  loadedClipGetState: () => ipcRenderer.invoke('loaded-clip:get-state'),
+  loadedClipKeyDown: (key) => ipcRenderer.invoke('loaded-clip:key-down', key),
+  loadedClipKeyUp: (key) => ipcRenderer.invoke('loaded-clip:key-up', key),
+  loadedClipHardStop: () => ipcRenderer.invoke('loaded-clip:hard-stop'),
+  loadedClipEnded: () => ipcRenderer.send('loaded-clip:ended'),
+  loadedClipPlayFailed: () => ipcRenderer.send('loaded-clip:play-failed'),
+  onLoadedClipState: (cb) => {
+    ipcRenderer.on('loaded-clip:state', (_e, state) => cb(state));
+  },
+  onLoadedClipPlay: (cb) => {
+    ipcRenderer.on('loaded-clip:play', (_e, data) => cb(data));
+  },
+  onLoadedClipForceStop: (cb) => {
+    ipcRenderer.on('loaded-clip:force-stop', () => cb());
+  },
   onHomeServerStatus: (cb) => {
     ipcRenderer.on('homeserver:status', (_e, state) => cb(state));
   },

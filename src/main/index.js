@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -61,8 +61,14 @@ const youtube = require('./youtube');
 const settings = require('./settings');
 const remote = require('./remote');
 const homeserver = require('./homeserver');
+const loadedClip = require('./loadedClip');
+const { createWinKeyHold } = require('./winKeyHold');
+const { classifyGlobalEvent } = require('./loadedClipControl');
 
 let mainWindow = null;
+let tray = null;
+let keyHold = null;
+app.isQuitting = false;
 
 // --- Auto-updater configuration ---
 autoUpdater.autoDownload = false;
@@ -149,8 +155,17 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   mainWindow.webContents.openDevTools();
 
+  mainWindow.on('close', (event) => {
+    if (app.isQuitting) return;
+    // Keep the process alive so global V/T, Delete, and mouse hooks still run.
+    event.preventDefault();
+    mainWindow.hide();
+  });
+
   mainWindow.webContents.once('did-finish-load', () => {
     homeserver.start();
+    const service = loadedClip.getService();
+    if (service) service.emit();
   });
 
   bot.onStatus((status) => {
@@ -183,34 +198,187 @@ console.error = (...args) => {
 // --- Global Shortcut Management ---
 let keyboardListener = null;
 
+function sendToRenderer(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (payload === undefined) mainWindow.webContents.send(channel);
+  else mainWindow.webContents.send(channel, payload);
+}
+
+function publishLoadedPlay(id) {
+  sendToRenderer('loaded-clip:play', { id });
+  remote.broadcastUpdate('playing', { id });
+}
+
+async function performHardStop({ notifyRenderer }) {
+  const service = loadedClip.getService();
+  if (service) await service.hardStop({ notifyRenderer });
+}
+
+async function performClipEnded() {
+  const service = loadedClip.getService();
+  if (service) await service.clipEnded();
+  remote.broadcastUpdate('stopped', {});
+}
+
+async function performPlayFailed() {
+  const service = loadedClip.getService();
+  if (service) await service.playFailed();
+}
+
+function dispatchLoadedKeyDown(key, { fromRenderer } = {}) {
+  const service = loadedClip.getService();
+  if (!service) return { type: 'ignore' };
+  const decision = service.keyDown(key);
+  if (decision.type === 'play') {
+    publishLoadedPlay(decision.id);
+  } else if (
+    decision.type === 'legacy' &&
+    !fromRenderer &&
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    !mainWindow.isFocused()
+  ) {
+    sendToRenderer('global-hotkey:keydown', key);
+  }
+  return decision;
+}
+
+function dispatchLoadedKeyUp(key, { fromRenderer } = {}) {
+  const service = loadedClip.getService();
+  if (!service) return { type: 'ignore' };
+  const decision = service.keyUp(key);
+  if (
+    decision.type === 'legacy' &&
+    !fromRenderer &&
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    !mainWindow.isFocused()
+  ) {
+    sendToRenderer('global-hotkey:keyup', key);
+  }
+  return decision;
+}
+
+function initLoadedClip() {
+  keyHold = createWinKeyHold();
+  loadedClip.init({
+    injector: keyHold,
+    getSounds: () => soundboard.getAllSounds(),
+    readSettings: () => settings.load(),
+    writeSettings: (partial) => {
+      settings.save({ ...settings.load(), ...partial });
+    },
+    hooks: {
+      onState: (state) => {
+        sendToRenderer('loaded-clip:state', state);
+        remote.broadcastUpdate('loaded-clip', state);
+      },
+      onHardStop: ({ notifyRenderer }) => {
+        try {
+          bot.stopSound();
+        } catch (err) {
+          console.error('Failed to stop playback:', err);
+        }
+        remote.broadcastUpdate('stopped', {});
+        if (notifyRenderer) sendToRenderer('loaded-clip:force-stop');
+      },
+    },
+  });
+}
+
+function trayImage() {
+  const iconPath = getIconPath();
+  if (iconPath) {
+    const fromFile = nativeImage.createFromPath(iconPath);
+    if (!fromFile.isEmpty()) return fromFile.resize({ width: 16, height: 16 });
+  }
+  try {
+    const b64Path = path.join(__dirname, '..', '..', 'build', 'icon-source.b64');
+    const b64 = fs.readFileSync(b64Path, 'utf8').trim();
+    const fromB64 = nativeImage.createFromDataURL(`data:image/png;base64,${b64}`);
+    if (!fromB64.isEmpty()) return fromB64.resize({ width: 16, height: 16 });
+  } catch {
+    // Fall through to a 1px icon so the tray still exists.
+  }
+  return nativeImage.createFromDataURL(
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  );
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  if (tray) return;
+  tray = new Tray(trayImage());
+  tray.setToolTip('Mithium Sound is still running so V and T work. Quit from this menu to exit.');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Show Mithium Sound', click: showMainWindow },
+    { type: 'separator' },
+    {
+      label: 'Quit',
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
+      },
+    },
+  ]));
+  tray.on('click', showMainWindow);
+}
+
 function registerGlobalShortcuts() {
   if (keyboardListener) return;
   
   try {
     keyboardListener = new GlobalKeyboardListener();
     
+    // Same low-level hook used since global V/T/Delete (v1.8.10+).
+    // It receives keys and mouse buttons while the window is hidden, minimized,
+    // or unfocused (including a fullscreen game). The hook dies if the process
+    // is quit; closing the window hides to the tray instead.
+    //
+    // Mouse double-click: two DOWN events for the same button, MOUSE LEFT
+    // (VK 0x01) or MOUSE RIGHT (VK 0x02), within 500ms. See loadedClipControl.
     keyboardListener.addListener((e, down) => {
-      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) {
-        // Don't send global events if window is focused (let renderer handle it)
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+
+      const classified = classifyGlobalEvent(e);
+      if (!classified) return;
+
+      if (classified.kind === 'mouse') {
+        if (!classified.down) return;
+        const service = loadedClip.getService();
+        if (!service) return;
+        const click = service.mouseDown(classified.button, Date.now());
+        if (click.doubleClick) performHardStop({ notifyRenderer: true });
         return;
       }
-      
-      const keyName = e.name;
-      const eventType = down['LEFT ALT'] || down['RIGHT ALT'] || 
-                        down['LEFT CTRL'] || down['RIGHT CTRL'] ||
-                        down['LEFT SHIFT'] || down['RIGHT SHIFT'] ? null : 
-                        (e.state === 'DOWN' ? 'keydown' : 'keyup');
-      
-      if (!eventType) return;
-      
-      // Handle V, T, and Delete keys
-      if (keyName === 'V' || keyName === 'T' || keyName === 'DELETE') {
-        const key = keyName === 'DELETE' ? 'Delete' : keyName.toLowerCase();
-        mainWindow.webContents.send(`global-hotkey:${eventType}`, key);
+
+      const modified = down['LEFT ALT'] || down['RIGHT ALT'] ||
+        down['LEFT CTRL'] || down['RIGHT CTRL'] ||
+        down['LEFT SHIFT'] || down['RIGHT SHIFT'];
+      if (modified) return;
+
+      // Focused window: renderer handles V/T/Delete so text fields still work.
+      // Unfocused / tray: this hook is the only path.
+      if (mainWindow.isFocused()) return;
+
+      if (classified.down) {
+        if (classified.key === 'Delete') {
+          performHardStop({ notifyRenderer: true });
+          return;
+        }
+        dispatchLoadedKeyDown(classified.key, { fromRenderer: false });
+      } else if (classified.key !== 'Delete') {
+        dispatchLoadedKeyUp(classified.key, { fromRenderer: false });
       }
     });
     
-    console.log('Global keyboard listener started for V, T, Delete');
+    console.log('Global keyboard listener started for V, T, Delete, and mouse double-click');
   } catch (err) {
     console.error('Failed to start global keyboard listener:', err);
   }
@@ -231,16 +399,20 @@ function unregisterGlobalShortcuts() {
 function libraryMutated() {
   remote.notifyLibraryUpdate();
   homeserver.onLocalChange();
+  const service = loadedClip.getService();
+  if (service) service.onLibraryChanged();
 }
 
 app.whenReady().then(async () => {
   await soundboard.init();
+  initLoadedClip();
   homeserver.onStatus((state) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('homeserver:status', state);
     }
   });
   createWindow();
+  createTray();
   
   // Register global shortcuts after window is created
   registerGlobalShortcuts();
@@ -257,10 +429,28 @@ app.whenReady().then(async () => {
   }
 });
 
+let quitReleaseStarted = false;
+app.on('before-quit', (event) => {
+  app.isQuitting = true;
+  if (quitReleaseStarted) return;
+  const service = loadedClip.getService();
+  if (!service || !service.publicState().simulating) return;
+  event.preventDefault();
+  quitReleaseStarted = true;
+  const release = service.shutdown().catch((err) => {
+    console.error('Failed to release simulated key on quit:', err);
+  });
+  const timeout = new Promise((resolve) => setTimeout(resolve, 800));
+  Promise.race([release, timeout]).finally(() => {
+    if (keyHold) keyHold.dispose();
+    app.quit();
+  });
+});
+
 app.on('window-all-closed', async () => {
+  if (!app.isQuitting) return;
   unregisterGlobalShortcuts();
   await bot.logout();
-  app.quit();
 });
 
 // --- Bot IPC ---
@@ -539,6 +729,29 @@ ipcMain.handle('remote:status', () => {
 ipcMain.handle('homeserver:getState', () => homeserver.getState());
 
 ipcMain.handle('homeserver:sync', () => homeserver.syncNow());
+
+ipcMain.handle('loaded-clip:get-state', () => loadedClip.getPublicState());
+
+ipcMain.handle('loaded-clip:key-down', (_e, key) => {
+  return dispatchLoadedKeyDown(key, { fromRenderer: true });
+});
+
+ipcMain.handle('loaded-clip:key-up', (_e, key) => {
+  return dispatchLoadedKeyUp(key, { fromRenderer: true });
+});
+
+ipcMain.handle('loaded-clip:hard-stop', async () => {
+  await performHardStop({ notifyRenderer: false });
+  return { ok: true };
+});
+
+ipcMain.on('loaded-clip:ended', () => {
+  performClipEnded();
+});
+
+ipcMain.on('loaded-clip:play-failed', () => {
+  performPlayFailed();
+});
 
 ipcMain.handle('remote:generateQR', async (_e, url) => {
   try {

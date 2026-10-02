@@ -1,0 +1,152 @@
+// Loaded-clip hotkey decisions. No Electron, no Windows key injection.
+//
+// V and T play the phone-loaded clip from start to finish.
+// When auto-hold is on (the default), the matching key is treated as held
+// until the clip ends or a hard stop releases it. Physical keyup does not
+// stop playback; the caller re-asserts the key-down so Windows stays held.
+//
+// Double-click: two DOWN events of the same mouse button within
+// DOUBLE_CLICK_MS (500, matching the usual Windows double-click time).
+// Left and right are tracked separately. A left click plus a right click
+// is not a double-click.
+
+const DOUBLE_CLICK_MS = 500;
+
+function createController(initial = {}) {
+  let loadedId = normalizeId(initial.loadedId);
+  let autoHold = initial.autoHold !== false;
+  let simulatedKey = null;
+  let playbackActive = false;
+  let releasing = null;
+  const lastMouseDown = { left: 0, right: 0 };
+
+  function snapshot() {
+    return {
+      id: loadedId,
+      autoHold,
+      simulating: simulatedKey,
+      playbackActive,
+    };
+  }
+
+  function setLoaded(id) {
+    loadedId = normalizeId(id);
+  }
+
+  function setAutoHold(enabled) {
+    const next = !!enabled;
+    const releaseKey = !next && simulatedKey ? simulatedKey : null;
+    autoHold = next;
+    if (releaseKey) {
+      releasing = releaseKey;
+      simulatedKey = null;
+    }
+    return { releaseKey };
+  }
+
+  function arm(key) {
+    if (key !== 'v' && key !== 't') return { type: 'ignore' };
+    if (loadedId == null) return { type: 'legacy' };
+    if (playbackActive) return { type: 'ignore' };
+    playbackActive = true;
+    if (autoHold) simulatedKey = key;
+    return { type: 'play', id: loadedId, key, simulate: autoHold };
+  }
+
+  function keyUp(key) {
+    if (releasing === key) {
+      releasing = null;
+      return { type: 'release-ack', key };
+    }
+    if (autoHold && simulatedKey === key) {
+      return { type: 'reassert', key };
+    }
+    if (loadedId == null) return { type: 'legacy', key };
+    return { type: 'ignore', key };
+  }
+
+  function takeRelease() {
+    const key = simulatedKey;
+    simulatedKey = null;
+    playbackActive = false;
+    if (key) releasing = key;
+    return key;
+  }
+
+  function hardStop() {
+    return { type: 'hard-stop', key: takeRelease() };
+  }
+
+  function clipEnded() {
+    if (!playbackActive && !simulatedKey) return { type: 'ignore', key: null };
+    return { type: 'clip-ended', key: takeRelease() };
+  }
+
+  function playFailed() {
+    return { type: 'play-failed', key: takeRelease() };
+  }
+
+  function mouseDown(button, now) {
+    if (button !== 'left' && button !== 'right') {
+      return { doubleClick: false, button };
+    }
+    const previous = lastMouseDown[button] || 0;
+    lastMouseDown[button] = now;
+    if (previous && now - previous <= DOUBLE_CLICK_MS && now >= previous) {
+      lastMouseDown[button] = 0;
+      return { doubleClick: true, button };
+    }
+    return { doubleClick: false, button };
+  }
+
+  return {
+    snapshot,
+    setLoaded,
+    setAutoHold,
+    arm,
+    keyUp,
+    hardStop,
+    clipEnded,
+    playFailed,
+    mouseDown,
+  };
+}
+
+function normalizeId(id) {
+  if (id == null || id === '') return null;
+  const number = Number(id);
+  if (!Number.isFinite(number)) return null;
+  return number;
+}
+
+function classifyGlobalEvent(event) {
+  if (!event || typeof event !== 'object') return null;
+  let name = event.name || '';
+  if (name === 'LBUTTON') name = 'MOUSE LEFT';
+  if (name === 'RBUTTON') name = 'MOUSE RIGHT';
+  if (!name && event.vKey === 1) name = 'MOUSE LEFT';
+  if (!name && event.vKey === 2) name = 'MOUSE RIGHT';
+  const down = event.state === 'DOWN';
+  if (name === 'MOUSE LEFT' || name === 'MOUSE RIGHT') {
+    return {
+      kind: 'mouse',
+      button: name === 'MOUSE LEFT' ? 'left' : 'right',
+      down,
+    };
+  }
+  if (name === 'V' || name === 'T' || name === 'DELETE') {
+    return {
+      kind: 'key',
+      key: name === 'DELETE' ? 'Delete' : name.toLowerCase(),
+      down,
+    };
+  }
+  return null;
+}
+
+module.exports = {
+  DOUBLE_CLICK_MS,
+  createController,
+  classifyGlobalEvent,
+  normalizeId,
+};

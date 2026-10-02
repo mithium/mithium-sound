@@ -8,6 +8,11 @@ let availableDevices = [];
 let armedClipId = null;
 let holdToPlayActive = false;
 let isKeyHeld = false;
+let loadedClipId = null;
+let loadedClipName = null;
+let loadedClipAutoHold = true;
+let loadedClipSimulating = null;
+let loadedWatch = null;
 
 // --- DOM refs ---
 const $ = (sel) => document.querySelector(sel);
@@ -825,6 +830,7 @@ function createSoundButton(s) {
   btn.className = 'sound-btn';
   if (s.id === playingId) btn.classList.add('playing');
   if (s.id === armedClipId) btn.classList.add('armed');
+  if (s.id === loadedClipId) btn.classList.add('loaded');
   btn.textContent = s.name;
   btn.dataset.id = s.id;
 
@@ -842,7 +848,7 @@ function createSoundButton(s) {
     const armBtn = document.createElement('button');
     armBtn.className = 'arm-btn';
     armBtn.textContent = '🎯';
-    armBtn.title = 'Arm for hold-to-play (V/T keys)';
+    armBtn.title = 'Arm for V/T when no clip is loaded from the phone';
     armBtn.dataset.id = s.id;
     if (s.id === armedClipId) armBtn.classList.add('armed');
     armBtn.addEventListener('click', (e) => {
@@ -919,6 +925,13 @@ async function moveToGroup(soundId, groupId) {
 }
 
 async function stopAllPlayback() {
+  loadedWatch = null;
+  try {
+    await window.api.loadedClipHardStop();
+  } catch (err) {
+    console.error('Failed to release simulated V/T hold:', err);
+  }
+
   try {
     await window.api.soundStop();
   } catch (err) {
@@ -932,6 +945,7 @@ async function stopAllPlayback() {
   
   playingId = null;
   renderSoundGrid();
+  updateLoadedClipBanner();
 }
 
 async function playLocalAudio(filePath, volume, deviceId) {
@@ -941,11 +955,13 @@ async function playLocalAudio(filePath, volume, deviceId) {
       audioElement.addEventListener('ended', () => {
         playingId = null;
         renderSoundGrid();
+        noteLoadedLocalDone();
       });
       audioElement.addEventListener('error', (e) => {
         console.error('Audio playback error:', e);
         playingId = null;
         renderSoundGrid();
+        noteLoadedLocalDone();
       });
     }
     
@@ -967,7 +983,10 @@ async function playLocalAudio(filePath, volume, deviceId) {
   }
 }
 
-async function playSound(id) {
+async function playSound(id, opts = {}) {
+  if (!opts.fromLoadedHotkey && (loadedWatch || loadedClipSimulating)) {
+    await stopAllPlayback();
+  }
   try {
     const settings = await window.api.settingsGet();
     const outputMode = settings.outputMode || 'discord';
@@ -985,7 +1004,7 @@ async function playSound(id) {
               message: `Failed to auto-join channel: ${err.message}`,
               confirmText: 'OK'
             });
-            return;
+            return false;
           }
         }
       }
@@ -999,12 +1018,14 @@ async function playSound(id) {
     
     playingId = id;
     renderSoundGrid();
+    return true;
   } catch (err) {
     await showModal({
       title: 'Playback Error',
       message: `Playback error: ${err.message}`,
       confirmText: 'OK'
     });
+    return false;
   }
 }
 
@@ -1373,9 +1394,11 @@ window.api.onStatus((status) => {
       joinBtn.disabled = false;
       break;
     case 'playback':
+      if (status.state === 'playing') noteLoadedDiscordPlaying();
       if (status.state === 'idle') {
         playingId = null;
         renderSoundGrid();
+        noteLoadedDiscordIdle();
       }
       break;
     case 'error':
@@ -1638,82 +1661,167 @@ function formatBytes(bytes) {
   }
 })();
 
-// --- Keyboard Handlers for Hold-to-Play ---
-document.addEventListener('keydown', (e) => {
+function updateLoadedClipBanner() {
+  const banner = $('#loaded-clip-banner');
+  const text = $('#loaded-clip-text');
+  const hold = $('#loaded-clip-hold');
+  if (!banner || !text || !hold) return;
+  if (loadedClipId == null) {
+    banner.classList.remove('active');
+    text.textContent = 'No clip loaded. Set one on the phone remote.';
+  } else {
+    banner.classList.add('active');
+    const name = loadedClipName || 'Loaded clip';
+    text.textContent = `Loaded: ${name}`;
+  }
+  if (loadedClipSimulating === 'v' || loadedClipSimulating === 't') {
+    hold.textContent = `Holding ${loadedClipSimulating.toUpperCase()}`;
+    hold.classList.remove('hidden');
+  } else {
+    hold.textContent = loadedClipAutoHold ? 'V/T auto-hold on' : 'V/T auto-hold off';
+    hold.classList.remove('hidden');
+  }
+}
+
+function applyLoadedClipState(state) {
+  if (!state) return;
+  loadedClipId = state.id == null ? null : Number(state.id);
+  if (!Number.isFinite(loadedClipId)) loadedClipId = null;
+  loadedClipName = state.name || null;
+  if (typeof state.autoHold === 'boolean') loadedClipAutoHold = state.autoHold;
+  loadedClipSimulating = state.simulating || null;
+  updateLoadedClipBanner();
+  renderSoundGrid();
+}
+
+function noteLoadedLocalDone() {
+  if (!loadedWatch || loadedWatch.settled) return;
+  loadedWatch.localPending = false;
+  finishLoadedWatch();
+}
+
+function noteLoadedDiscordPlaying() {
+  if (!loadedWatch || loadedWatch.settled) return;
+  loadedWatch.discordSawPlaying = true;
+}
+
+function noteLoadedDiscordIdle() {
+  if (!loadedWatch || loadedWatch.settled || !loadedWatch.discordPending) return;
+  if (!loadedWatch.discordSawPlaying) return;
+  loadedWatch.discordPending = false;
+  finishLoadedWatch();
+}
+
+function finishLoadedWatch() {
+  if (!loadedWatch || loadedWatch.settled) return;
+  if (loadedWatch.localPending || loadedWatch.discordPending) return;
+  loadedWatch.settled = true;
+  loadedWatch = null;
+  window.api.loadedClipEnded();
+}
+
+async function playLoadedFromHotkey(id) {
+  const settings = await window.api.settingsGet();
+  const mode = settings.outputMode || 'discord';
+  loadedWatch = {
+    localPending: mode === 'local' || mode === 'both',
+    discordPending: mode === 'discord' || mode === 'both',
+    discordSawPlaying: false,
+    settled: false,
+  };
+  const ok = await playSound(id, { fromLoadedHotkey: true });
+  if (!loadedWatch || loadedWatch.settled) return;
+  if (!ok) {
+    loadedWatch = null;
+    window.api.loadedClipPlayFailed();
+  }
+}
+
+function handleLegacyKeyDown(key) {
+  if (!armedClipId) return;
+  if (!holdToPlayActive) {
+    playSound(armedClipId);
+    return;
+  }
+  if (!isKeyHeld) {
+    isKeyHeld = true;
+    playSound(armedClipId);
+  }
+}
+
+async function handleLegacyKeyUp(key) {
+  if (!holdToPlayActive || !armedClipId || !isKeyHeld) return;
+  if (key !== 'v' && key !== 't') return;
+  isKeyHeld = false;
+  await stopAllPlayback();
+  armedClipId = null;
+  renderSoundGrid();
+}
+
+// --- Keyboard Handlers ---
+// Focused window uses these. Unfocused / tray uses the global hook in main,
+// which calls the same loaded-clip path. Text fields are left alone.
+document.addEventListener('keydown', async (e) => {
   const target = e.target;
   const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
-  
-  // Delete key to stop playback
-  if (e.key === 'Delete' && !isInputField) {
+  if (isInputField) return;
+
+  if (e.key === 'Delete') {
     e.preventDefault();
     stopAllPlayback();
     return;
   }
-  
-  // Hold-to-play for V/T keys
-  if (!holdToPlayActive || !armedClipId || isKeyHeld) return;
-  
+
   const key = e.key.toLowerCase();
-  if (key === 'v' || key === 't') {
-    if (isInputField) return;
-    
-    e.preventDefault();
-    isKeyHeld = true;
-    playSound(armedClipId);
-  }
+  if (key !== 'v' && key !== 't') return;
+  if (e.repeat) return;
+  e.preventDefault();
+
+  const decision = await window.api.loadedClipKeyDown(key);
+  if (!decision || decision.type === 'legacy') handleLegacyKeyDown(key);
 });
 
 document.addEventListener('keyup', async (e) => {
   const target = e.target;
   const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
-  
-  if (!holdToPlayActive || !armedClipId || !isKeyHeld) return;
-  
+  if (isInputField) return;
+
   const key = e.key.toLowerCase();
-  if (key === 'v' || key === 't') {
-    if (isInputField) return;
-    
-    e.preventDefault();
-    isKeyHeld = false;
-    await stopAllPlayback();
-    armedClipId = null;
-    renderSoundGrid();
-  }
+  if (key !== 'v' && key !== 't') return;
+  e.preventDefault();
+
+  const decision = await window.api.loadedClipKeyUp(key);
+  if (!decision || decision.type === 'legacy') handleLegacyKeyUp(key);
 });
 
-// --- Global Hotkey Handlers (work when app is in background) ---
+// Legacy armed-clip path when the window is not focused and nothing is loaded.
 window.api.onGlobalHotkeyKeydown((key) => {
-  // Delete key to stop playback
   if (key === 'Delete') {
     stopAllPlayback();
     return;
   }
-  
-  // Hold-to-play for V/T keys (or click-to-play if not in hold mode)
-  if (key === 'v' || key === 't') {
-    if (!holdToPlayActive) {
-      // Click-to-play mode: play on keydown
-      if (armedClipId) {
-        playSound(armedClipId);
-      }
-    } else {
-      // Hold-to-play mode: start playing on keydown
-      if (armedClipId && !isKeyHeld) {
-        isKeyHeld = true;
-        playSound(armedClipId);
-      }
-    }
-  }
+  if ((key === 'v' || key === 't') && loadedClipId == null) handleLegacyKeyDown(key);
 });
 
 window.api.onGlobalHotkeyKeyup(async (key) => {
-  // Only relevant for hold-to-play mode
-  if (!holdToPlayActive || !armedClipId || !isKeyHeld) return;
-  
-  if (key === 'v' || key === 't') {
-    isKeyHeld = false;
-    await stopAllPlayback();
-    armedClipId = null;
-    renderSoundGrid();
-  }
+  if ((key === 'v' || key === 't') && loadedClipId == null) handleLegacyKeyUp(key);
+});
+
+window.api.onLoadedClipState((state) => {
+  applyLoadedClipState(state);
+});
+
+window.api.onLoadedClipPlay((data) => {
+  if (!data || data.id == null) return;
+  playLoadedFromHotkey(data.id);
+});
+
+window.api.onLoadedClipForceStop(() => {
+  stopAllPlayback();
+});
+
+window.api.loadedClipGetState().then((state) => {
+  applyLoadedClipState(state);
+}).catch((err) => {
+  console.error('Failed to read loaded clip:', err);
 });

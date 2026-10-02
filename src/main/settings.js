@@ -21,6 +21,8 @@ const DEFAULTS = {
   homeServerEnabled: false,
   homeServerUrl: '',
   homeServerToken: '',
+  loadedClipId: null,
+  loadedClipAutoHold: true,
 };
 
 let cache = null;
@@ -37,7 +39,9 @@ function load() {
 }
 
 function save(settings) {
-  cache = { ...DEFAULTS, ...settings };
+  // Merge so a renderer save does not drop keys it does not send,
+  // including the phone loaded-clip id and the V/T auto-hold toggle.
+  cache = { ...DEFAULTS, ...(cache || {}), ...settings };
   fs.writeFileSync(SETTINGS_PATH, JSON.stringify(cache, null, 2));
   return cache;
 }
