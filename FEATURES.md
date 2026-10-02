@@ -113,7 +113,7 @@ If update available:
 - Enable, LAN base URL, auth token, connection status, Sync now
 - Playback, hotkeys, and the clip grid always use the local library
 - Unreachable server shows Offline and does not block use
-- See `docs/HOME_SERVER.md` for the sync rule and HTTP contract
+- See `docs/HOME_SERVER.md` for the sync rule, HTTP contract, and planned lab URLs (`http://192.168.0.211:4092` on the LAN for this PC)
 
 ## Technical Architecture
 
@@ -147,7 +147,7 @@ If update available:
   "outputMode": "both",
   "selectedDeviceId": "ABC123...",
   "homeServerEnabled": false,
-  "homeServerUrl": "http://homelab:8787",
+  "homeServerUrl": "http://192.168.0.211:4092",
   "homeServerToken": ""
 }
 ```

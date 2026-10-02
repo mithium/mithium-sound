@@ -13,8 +13,8 @@ Settings → **Home Server** (separate from **LAN Web Remote Control**):
 | Field | Purpose |
 | --- | --- |
 | Enable Home Server sync | Turns sync on or off. Off means no network calls. |
-| Base URL | LAN origin, for example `http://homelab:8787` or `http://192.168.1.20:8787` |
-| Auth token | Shared secret. Not the Discord bot token. |
+| Base URL | LAN origin of the library service. On the Windows PC use `http://192.168.0.211:4092`. |
+| Auth token | Shared secret sent as `Authorization: Bearer`. Not the Discord bot token. |
 | Connection | **Connected**, **Offline**, or **Error** |
 | Sync now | Pulls the remote library, then pushes queued local edits |
 
@@ -30,6 +30,19 @@ X-Api-Key: <token>
 ```
 
 Only `http:` and `https:` URLs are allowed. Put the secret in the token field, not in the URL.
+
+## Planned lab service
+
+The home lab is building the library service in the private repo `mithium/mithium-sound-library`. It is planned to serve the same routes as this document (`/api/health`, `/api/library`, clip audio, clip and group create/update/delete, and optional `GET /api/sync?since=`).
+
+| Client | Base URL |
+| --- | --- |
+| This Windows app, on the LAN | `http://192.168.0.211:4092` |
+| Phone PWA, over Tailscale | `http://100.73.61.67:4092` |
+
+Auth for that service is `Authorization: Bearer <API_KEY>`. This app already sends that header (and `X-Api-Key` with the same value). Paste the API key into the Home Server token field. Do not paste the Discord bot token.
+
+The phone PWA is not part of this pull request. Until `mithium-sound-library` is up, use the local stub below.
 
 ## Sync rule
 
@@ -171,6 +184,6 @@ That covers the merge rule, a pull that writes audio into a local library, a pus
 
 ## What is not in this change
 
-- No phone PWA and no deploy of the lab service. This is the Windows client plus a local stub.
+- No phone PWA and no deploy of `mithium/mithium-sound-library`. This pull request is the Windows client plus a local stub. The planned binds are listed above.
 - No release bump and no git tag.
 - LAN Web Remote is unchanged.
