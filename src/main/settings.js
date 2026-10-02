@@ -18,6 +18,9 @@ const DEFAULTS = {
   remoteEnabled: false,
   remotePort: 3000,
   remoteAuthToken: '',
+  homeServerEnabled: false,
+  homeServerUrl: '',
+  homeServerToken: '',
 };
 
 let cache = null;

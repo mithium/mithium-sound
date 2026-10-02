@@ -193,6 +193,7 @@ async function loadSettings() {
   
   // Load remote settings
   await loadRemoteSettings(s);
+  await loadHomeServerSettings(s);
   
   return s;
 }
@@ -211,6 +212,9 @@ async function autoSaveSettings() {
     remoteEnabled: $('#setting-remote-enabled').checked,
     remotePort: parseInt($('#setting-remote-port').value, 10),
     remoteAuthToken: $('#setting-remote-auth').value.trim(),
+    homeServerEnabled: $('#setting-home-server-enabled').checked,
+    homeServerUrl: $('#setting-home-server-url').value.trim(),
+    homeServerToken: $('#setting-home-server-token').value.trim(),
   };
   
   await window.api.settingsSave(data);
@@ -443,6 +447,117 @@ $('#setting-remote-enabled').addEventListener('change', handleRemoteEnabledChang
 $('#setting-remote-port').addEventListener('change', handleRemotePortChange);
 $('#setting-remote-auth').addEventListener('blur', handleRemoteAuthChange);
 
+// --- Home Server (optional; playback always uses the local library) ---
+function renderHomeServerStatus(state) {
+  const el = $('#home-server-status-text');
+  const msg = $('#home-server-message');
+  const syncBtn = $('#home-server-sync-btn');
+  if (!el || !msg || !syncBtn) return;
+
+  const status = (state && state.status) || 'idle';
+  const labels = {
+    connected: 'Connected',
+    offline: 'Offline',
+    error: 'Error',
+    disabled: 'Disabled',
+    syncing: 'Syncing…',
+    idle: 'Checking…',
+  };
+  el.textContent = labels[status] || status;
+  const colors = {
+    connected: 'var(--success)',
+    error: 'var(--danger)',
+    syncing: 'var(--warning)',
+  };
+  el.style.color = colors[status] || 'var(--text-muted)';
+
+  const parts = [];
+  if (state && state.message) parts.push(state.message);
+  if (state && state.lastSyncAt) {
+    parts.push(`Last sync ${new Date(state.lastSyncAt).toLocaleString()}`);
+  }
+  if (state && (state.pulled || state.pushed)) {
+    parts.push(`Pulled ${state.pulled || 0}, pushed ${state.pushed || 0}`);
+  }
+  msg.textContent = parts.join(' · ');
+
+  const enabled = $('#setting-home-server-enabled').checked;
+  syncBtn.disabled = !enabled || status === 'syncing';
+}
+
+function setHomeServerConfigVisible() {
+  const enabled = $('#setting-home-server-enabled').checked;
+  $('#home-server-config').classList.toggle('hidden', !enabled);
+}
+
+async function loadHomeServerSettings(s) {
+  $('#setting-home-server-enabled').checked = !!s.homeServerEnabled;
+  $('#setting-home-server-url').value = s.homeServerUrl || '';
+  $('#setting-home-server-token').value = s.homeServerToken || '';
+  setHomeServerConfigVisible();
+  try {
+    const state = await window.api.homeServerGetState();
+    renderHomeServerStatus(state);
+  } catch (err) {
+    renderHomeServerStatus({ status: 'offline', message: 'Status unavailable. Local library is still ready.' });
+    console.error('Home Server status failed:', err);
+  }
+}
+
+async function handleHomeServerEnabledChange() {
+  setHomeServerConfigVisible();
+  await autoSaveSettings();
+  if ($('#setting-home-server-enabled').checked) {
+    renderHomeServerStatus({ status: 'syncing', message: 'Syncing…' });
+    try {
+      const state = await window.api.homeServerSync();
+      renderHomeServerStatus(state);
+    } catch (err) {
+      renderHomeServerStatus({
+        status: 'offline',
+        message: 'Home Server is offline. Playback continues from the local library.',
+      });
+      console.error('Home Server sync failed:', err);
+    }
+  } else {
+    renderHomeServerStatus({
+      status: 'disabled',
+      message: 'Home Server is off. Playback uses the local library.',
+    });
+  }
+}
+
+async function handleHomeServerSync() {
+  await autoSaveSettings();
+  renderHomeServerStatus({ status: 'syncing', message: 'Syncing…' });
+  try {
+    const state = await window.api.homeServerSync();
+    renderHomeServerStatus(state);
+  } catch (err) {
+    renderHomeServerStatus({
+      status: 'offline',
+      message: 'Home Server is offline. Playback continues from the local library.',
+    });
+    console.error('Home Server sync failed:', err);
+  }
+}
+
+$('#setting-home-server-enabled').addEventListener('change', handleHomeServerEnabledChange);
+$('#setting-home-server-url').addEventListener('blur', autoSaveSettings);
+$('#setting-home-server-token').addEventListener('blur', autoSaveSettings);
+$('#home-server-sync-btn').addEventListener('click', handleHomeServerSync);
+
+window.api.onHomeServerStatus(async (state) => {
+  renderHomeServerStatus(state);
+  if (state && state.libraryChanged) {
+    try {
+      await refreshSounds();
+    } catch (err) {
+      console.error('Failed to refresh sounds after Home Server sync:', err);
+    }
+  }
+});
+
 // Load remote settings
 async function loadRemoteSettings(s) {
   $('#setting-remote-enabled').checked = s.remoteEnabled || false;
@@ -617,8 +732,9 @@ function renderSoundGrid() {
   
   soundGrid.innerHTML = '';
   
-  const ungroupedSounds = sounds.filter(s => !s.group_id);
-  const groupedSounds = sounds.filter(s => s.group_id);
+  const liveGroupIds = new Set(groups.map((group) => group.id));
+  const ungroupedSounds = sounds.filter((s) => !s.group_id || !liveGroupIds.has(s.group_id));
+  const groupedSounds = sounds.filter((s) => s.group_id && liveGroupIds.has(s.group_id));
   
   groups.forEach(group => {
     const groupSounds = groupedSounds.filter(s => s.group_id === group.id);

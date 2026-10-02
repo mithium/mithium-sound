@@ -5,6 +5,7 @@
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
+    "test:home-server": "node scripts/test-home-server-sync.js",
     "postinstall": "node scripts/patch-voice.js && node scripts/extract-ffmpeg.js",
     "build": "node scripts/patch-voice.js && node scripts/extract-ffmpeg.js && electron-builder --win nsis zip"
   },
