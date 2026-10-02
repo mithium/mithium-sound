@@ -176,7 +176,16 @@ async function main() {
     const group = groupWriteBody({ id: 'CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC', name: 'Bits', sortOrder: 1 });
     assert.strictEqual(group.id, 'cccccccc-cccc-4ccc-8ccc-cccccccccccc');
     assert.strictEqual(Object.prototype.hasOwnProperty.call(group, 'updatedAt'), false);
-    const patch = clipPatchBody({ name: 'Airhorn', groupId: 'G', trimStartMs: 0, trimEndMs: 10, updatedAt: 'nope', youtubeUrl: 'https://youtu.be/x' });
+    const patch = clipPatchBody({
+      name: 'Airhorn',
+      groupId: 'G',
+      trimStartMs: 0,
+      trimEndMs: 10,
+      updatedAt: 'nope',
+      youtubeUrl: 'https://youtu.be/x',
+      attribution_text: 'Keep this on the PC',
+      attribution_license: 'CC BY 4.0',
+    });
     assert.deepStrictEqual(Object.keys(patch).sort(), ['groupId', 'name', 'trimEndMs', 'trimStartMs']);
   });
 
@@ -469,6 +478,37 @@ async function main() {
       const offline = await homeserver.syncNow();
       assert.strictEqual(offline.status, 'offline');
       assert.ok(soundboard.getAllSounds().some((row) => row.name === 'Lab Clip'));
+
+      const imported = soundboard.addAudioClip({
+        name: 'Door',
+        bytes: Buffer.alloc(80, 7),
+        extension: '.mp3',
+        sourceType: 'openverse',
+        attribution: {
+          creator: 'bennstir',
+          license: 'CC BY 4.0',
+          licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+          sourceUrl: 'https://freesound.org/people/bennstir/sounds/80929',
+          text: '"Door" by bennstir is licensed under CC BY 4.0.',
+        },
+      });
+      assert.strictEqual(imported.attribution_license, 'CC BY 4.0');
+      assert.strictEqual(imported.attribution_creator, 'bennstir');
+      const snap = soundboard.getSyncSnapshot().clips.find((item) => item.id === imported.sync_id);
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(snap, 'attribution_text'), false);
+      soundboard.applySyncedClip({
+        id: imported.sync_id,
+        name: 'Door renamed remotely',
+        hash: imported.content_hash,
+        revision: 9,
+        updatedAt: '2026-12-01T00:00:00.000Z',
+        deletedAt: null,
+      });
+      const kept = soundboard.getAllSounds().find((row) => row.id === imported.id);
+      assert.strictEqual(kept.name, 'Door renamed remotely');
+      assert.strictEqual(kept.attribution_license, 'CC BY 4.0');
+      assert.strictEqual(kept.attribution_source_url, 'https://freesound.org/people/bennstir/sounds/80929');
+      assert.ok(kept.attribution_text.includes('CC BY 4.0'));
     } finally {
       if (stub.server.listening) await stub.close();
       Module._load = originalLoad;

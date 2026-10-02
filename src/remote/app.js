@@ -87,6 +87,7 @@ async function fetchLibrary() {
     sounds = data.sounds || [];
     groups = data.groups || [];
     renderSoundGrid();
+    if (window.mithiumRemoteRefresh) window.mithiumRemoteRefresh();
   } catch (err) {
     console.error('Failed to fetch library:', err);
     showError('Failed to load sounds. Please check connection.');
@@ -166,8 +167,18 @@ function createSoundButton(sound) {
   btn.className = 'sound-btn';
   if (sound.id === playingId) btn.classList.add('playing');
   if (sound.id === loadedClipId) btn.classList.add('loaded');
-  btn.textContent = sound.name;
   btn.dataset.id = sound.id;
+  const nameEl = document.createElement('span');
+  nameEl.textContent = sound.name;
+  btn.appendChild(nameEl);
+  if (sound.attribution_license || sound.attribution_text) {
+    btn.classList.add('has-meta');
+    const license = document.createElement('span');
+    license.className = 'clip-license';
+    license.textContent = sound.attribution_license || 'Licensed';
+    btn.appendChild(license);
+    btn.title = sound.attribution_text || sound.attribution_license;
+  }
   
   btn.addEventListener('click', () => playSound(sound.id));
 
@@ -193,8 +204,21 @@ function createSoundButton(sound) {
     wrapper.appendChild(badge);
   }
   
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.className = 'edit-btn';
+  editBtn.textContent = 'Edit';
+  editBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (window.mithiumRemoteEdit) window.mithiumRemoteEdit(sound.id);
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'clip-actions';
+  actions.appendChild(loadBtn);
+  actions.appendChild(editBtn);
   wrapper.appendChild(btn);
-  wrapper.appendChild(loadBtn);
+  wrapper.appendChild(actions);
   return wrapper;
 }
 
@@ -248,7 +272,7 @@ function refreshLoadedButtons() {
     btn.classList.toggle('loaded', id === loadedClipId);
   });
   soundGrid.querySelectorAll('.load-btn').forEach((btn) => {
-    const wrapper = btn.parentElement;
+    const wrapper = btn.closest('.sound-btn-wrapper');
     const soundBtn = wrapper && wrapper.querySelector('.sound-btn');
     const id = soundBtn ? parseInt(soundBtn.dataset.id, 10) : NaN;
     const active = id === loadedClipId;
@@ -456,6 +480,7 @@ function handleWebSocketMessage(message) {
       groups = data.groups || [];
       renderSoundGrid();
       updateLoadedPanel();
+      if (window.mithiumRemoteRefresh) window.mithiumRemoteRefresh();
       break;
 
     case 'loaded-clip':
@@ -537,6 +562,8 @@ async function init() {
     console.error('Failed to fetch status:', err);
   }
 }
+
+window.mithiumRemoteState = () => ({ sounds, groups, showError, authHeaders, authToken });
 
 // Start the app
 init();

@@ -23,6 +23,7 @@ const DEFAULTS = {
   homeServerToken: '',
   loadedClipId: null,
   loadedClipAutoHold: true,
+  recordDeviceId: '',
 };
 
 let cache = null;

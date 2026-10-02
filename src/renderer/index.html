@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self' blob:; img-src 'self' data: blob:">
   <title>Mithium Sound</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -31,6 +31,8 @@
   <!-- Tabs -->
   <nav id="tabs">
     <button class="tab active" data-tab="sounds">Soundboard</button>
+    <button class="tab" data-tab="record">Record</button>
+    <button class="tab" data-tab="openverse">Openverse</button>
     <button class="tab" data-tab="youtube">YouTube</button>
     <button class="tab" data-tab="settings">Settings</button>
   </nav>
@@ -52,7 +54,97 @@
       <span id="loaded-clip-hold">V/T auto-hold on</span>
     </div>
     <div id="sound-grid" class="sound-grid">
-      <p class="empty-message">No sounds yet. Import some audio files or extract from YouTube.</p>
+      <p class="empty-message">No sounds yet. Import audio, record a take, or search Openverse.</p>
+    </div>
+  </section>
+
+  <!-- Record / insert edit -->
+  <section id="tab-record" class="tab-content">
+    <div class="studio-block">
+      <h2>Record</h2>
+      <p class="studio-help">Record with the microphone on this PC. The waveform stays after you stop. Save the take, then it plays, groups, and syncs like any other clip.</p>
+      <div class="form-group">
+        <label for="rec-device">Microphone</label>
+        <div class="studio-inline">
+          <select id="rec-device"></select>
+          <button id="rec-refresh" type="button">Refresh</button>
+        </div>
+      </div>
+      <canvas id="rec-wave" class="wave-canvas" height="140" aria-label="Recording waveform"></canvas>
+      <p id="rec-marker" class="studio-help">Click the waveform to choose an insert point.</p>
+      <div class="studio-inline">
+        <button id="rec-start" type="button">Record</button>
+        <button id="rec-stop" type="button" disabled>Stop</button>
+        <span id="rec-status">Ready</span>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="rec-name">Take name</label>
+          <input type="text" id="rec-name" placeholder="Voice take" maxlength="80">
+        </div>
+        <div class="form-group">
+          <label for="rec-group">Group</label>
+          <select id="rec-group"></select>
+        </div>
+      </div>
+      <button id="rec-save" type="button" disabled>Save take to soundboard</button>
+      <p id="rec-error" class="error-text hidden"></p>
+    </div>
+    <div class="studio-block">
+      <h2>Insert edit</h2>
+      <p class="studio-help">One clip, plus other soundboard clips placed before it, after it, or at the marker. Render writes a new clip with the bundled FFmpeg. This is not a multi-track mix.</p>
+      <div class="form-group">
+        <label for="edit-base">Clip being edited</label>
+        <select id="edit-base"></select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="edit-insert">Insert clip</label>
+          <select id="edit-insert"></select>
+        </div>
+      </div>
+      <div class="studio-inline">
+        <button id="edit-before" type="button">Insert before</button>
+        <button id="edit-at" type="button">Insert at point</button>
+        <button id="edit-after" type="button">Insert after</button>
+      </div>
+      <ol id="edit-order" class="insert-list"></ol>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="edit-name">New clip name</label>
+          <input type="text" id="edit-name" placeholder="Edited take" maxlength="80">
+        </div>
+        <div class="form-group">
+          <label for="edit-group">Group</label>
+          <select id="edit-group"></select>
+        </div>
+      </div>
+      <button id="edit-render" type="button" disabled>Render new clip</button>
+      <p id="edit-error" class="error-text hidden"></p>
+    </div>
+  </section>
+
+  <!-- Openverse -->
+  <section id="tab-openverse" class="tab-content">
+    <div class="studio-block">
+      <h2>Openverse sound effects</h2>
+      <p class="studio-help">Search the public Openverse audio catalog. Needs a network connection. A failed search leaves the soundboard usable.</p>
+      <div class="studio-inline">
+        <input type="text" id="ov-query" placeholder="door slam, applause, beep" maxlength="200">
+        <button id="ov-search" type="button">Search</button>
+      </div>
+      <div class="form-group">
+        <label for="ov-group">Add to group</label>
+        <select id="ov-group"></select>
+      </div>
+      <p id="ov-note" class="studio-help"></p>
+      <p id="ov-error" class="error-text hidden"></p>
+      <div id="ov-results" class="ov-results"></div>
+      <div class="studio-inline">
+        <button id="ov-prev" type="button" class="hidden">Previous</button>
+        <button id="ov-next" type="button" class="hidden">Next</button>
+      </div>
+      <audio id="ov-player" class="hidden" controls></audio>
     </div>
   </section>
 
@@ -246,6 +338,7 @@
               <li>The remote will work like a native app</li>
             </ol>
             <p style="margin: 8px 0 0 0;"><strong>Note:</strong> Both devices must be on the same Wi-Fi network. Sounds play on the Windows PC, not the phone.</p>
+            <p style="margin: 8px 0 0 0;">Phone recording needs the <strong>https</strong> link (the next port). Accept the certificate warning once. The Discord bot token is not sent to the phone.</p>
           </div>
         </div>
       </details>
@@ -330,6 +423,7 @@
   <!-- Context Menu -->
   <div id="context-menu" class="context-menu hidden">
     <button data-action="rename">Rename</button>
+    <button data-action="edit">Edit inserts</button>
     <div class="context-menu-divider"></div>
     <div data-action="move-to-group" class="context-submenu">
       <button class="context-submenu-trigger">Move to Group ▶</button>
@@ -354,7 +448,10 @@
     </div>
   </div>
 
+  <script src="../shared/editPlan.js"></script>
+  <script src="../shared/waveform.js"></script>
   <script src="timecode.js"></script>
+  <script src="studio.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

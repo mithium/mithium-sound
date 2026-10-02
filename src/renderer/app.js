@@ -322,7 +322,9 @@ async function updateRemoteStatus() {
       
       // Show URLs
       urlList.innerHTML = '';
-      status.urls.forEach(url => {
+      const labeled = status.urls.map((url) => ({ url, label: '' }));
+      (status.secureUrls || []).forEach((url) => labeled.push({ url, label: 'HTTPS mic · ' }));
+      labeled.forEach(({ url, label }) => {
         const authToken = $('#setting-remote-auth').value.trim();
         const fullUrl = authToken ? `${url}?token=${encodeURIComponent(authToken)}` : url;
         
@@ -330,7 +332,7 @@ async function updateRemoteStatus() {
         urlDiv.style.cssText = 'display: flex; align-items: center; gap: 8px; padding: 8px; background: var(--bg-primary); border-radius: 4px; font-family: monospace; font-size: 12px;';
         
         const urlText = document.createElement('span');
-        urlText.textContent = fullUrl;
+        urlText.textContent = `${label}${fullUrl}`;
         urlText.style.flex = '1';
         urlText.style.wordBreak = 'break-all';
         
@@ -727,11 +729,16 @@ async function refreshSounds() {
   sounds = await window.api.soundGetAll();
   groups = await window.api.groupGetAll();
   renderSoundGrid();
+  if (window.mithiumStudioRefresh) window.mithiumStudioRefresh();
 }
+
+window.mithiumSounds = () => sounds;
+window.mithiumGroups = () => groups;
+window.mithiumRefresh = refreshSounds;
 
 function renderSoundGrid() {
   if (sounds.length === 0) {
-    soundGrid.innerHTML = '<p class="empty-message">No sounds yet. Import some audio files or extract from YouTube.</p>';
+    soundGrid.innerHTML = '<p class="empty-message">No sounds yet. Import audio, record a take, or search Openverse.</p>';
     return;
   }
   
@@ -831,8 +838,18 @@ function createSoundButton(s) {
   if (s.id === playingId) btn.classList.add('playing');
   if (s.id === armedClipId) btn.classList.add('armed');
   if (s.id === loadedClipId) btn.classList.add('loaded');
-  btn.textContent = s.name;
   btn.dataset.id = s.id;
+  const nameEl = document.createElement('span');
+  nameEl.textContent = s.name;
+  btn.appendChild(nameEl);
+  if (s.attribution_license || s.attribution_text) {
+    btn.classList.add('has-meta');
+    const license = document.createElement('span');
+    license.className = 'clip-license';
+    license.textContent = s.attribution_license || 'Licensed';
+    btn.appendChild(license);
+    btn.title = s.attribution_text || s.attribution_license;
+  }
 
   btn.addEventListener('click', () => playSound(s.id));
   btn.addEventListener('contextmenu', (e) => showContextMenu(e, s.id));
@@ -1082,6 +1099,12 @@ submenuContent.addEventListener('click', async (e) => {
     await moveToGroup(contextTarget, groupId || null);
     contextMenu.classList.add('hidden');
   }
+});
+
+contextMenu.querySelector('[data-action="edit"]').addEventListener('click', () => {
+  const id = contextTarget;
+  if (!id || !window.mithiumEditClip) return;
+  window.mithiumEditClip(id);
 });
 
 contextMenu.querySelector('[data-action="rename"]').addEventListener('click', async () => {
@@ -1825,3 +1848,5 @@ window.api.loadedClipGetState().then((state) => {
 }).catch((err) => {
   console.error('Failed to read loaded clip:', err);
 });
+
+startDesktopStudio();
