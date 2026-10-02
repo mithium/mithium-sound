@@ -73,4 +73,12 @@ contextBridge.exposeInMainWorld('api', {
   onUpdateError: (cb) => {
     ipcRenderer.on('update:error', (_e, message) => cb(message));
   },
+  
+  // Global hotkeys
+  onGlobalHotkeyKeydown: (cb) => {
+    ipcRenderer.on('global-hotkey:keydown', (_e, key) => cb(key));
+  },
+  onGlobalHotkeyKeyup: (cb) => {
+    ipcRenderer.on('global-hotkey:keyup', (_e, key) => cb(key));
+  },
 });

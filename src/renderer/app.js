@@ -1246,3 +1246,40 @@ document.addEventListener('keyup', async (e) => {
     renderSoundGrid();
   }
 });
+
+// --- Global Hotkey Handlers (work when app is in background) ---
+window.api.onGlobalHotkeyKeydown((key) => {
+  // Delete key to stop playback
+  if (key === 'Delete') {
+    stopAllPlayback();
+    return;
+  }
+  
+  // Hold-to-play for V/T keys (or click-to-play if not in hold mode)
+  if (key === 'v' || key === 't') {
+    if (!holdToPlayActive) {
+      // Click-to-play mode: play on keydown
+      if (armedClipId) {
+        playSound(armedClipId);
+      }
+    } else {
+      // Hold-to-play mode: start playing on keydown
+      if (armedClipId && !isKeyHeld) {
+        isKeyHeld = true;
+        playSound(armedClipId);
+      }
+    }
+  }
+});
+
+window.api.onGlobalHotkeyKeyup(async (key) => {
+  // Only relevant for hold-to-play mode
+  if (!holdToPlayActive || !armedClipId || !isKeyHeld) return;
+  
+  if (key === 'v' || key === 't') {
+    isKeyHeld = false;
+    await stopAllPlayback();
+    armedClipId = null;
+    renderSoundGrid();
+  }
+});
