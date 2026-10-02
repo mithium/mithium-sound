@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
+const { GlobalKeyboardListener } = require('node-global-key-listener');
 
 // Setup FFmpeg for prism-media / @discordjs/voice
 // ffmpeg-static checks process.env.FFMPEG_BIN, so set it before requiring anything
@@ -173,9 +174,60 @@ console.error = (...args) => {
   }
 };
 
+// --- Global Shortcut Management ---
+let keyboardListener = null;
+
+function registerGlobalShortcuts() {
+  if (keyboardListener) return;
+  
+  try {
+    keyboardListener = new GlobalKeyboardListener();
+    
+    keyboardListener.addListener((e, down) => {
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) {
+        // Don't send global events if window is focused (let renderer handle it)
+        return;
+      }
+      
+      const keyName = e.name;
+      const eventType = down['LEFT ALT'] || down['RIGHT ALT'] || 
+                        down['LEFT CTRL'] || down['RIGHT CTRL'] ||
+                        down['LEFT SHIFT'] || down['RIGHT SHIFT'] ? null : 
+                        (e.state === 'DOWN' ? 'keydown' : 'keyup');
+      
+      if (!eventType) return;
+      
+      // Handle V, T, and Delete keys
+      if (keyName === 'V' || keyName === 'T' || keyName === 'DELETE') {
+        const key = keyName === 'DELETE' ? 'Delete' : keyName.toLowerCase();
+        mainWindow.webContents.send(`global-hotkey:${eventType}`, key);
+      }
+    });
+    
+    console.log('Global keyboard listener started for V, T, Delete');
+  } catch (err) {
+    console.error('Failed to start global keyboard listener:', err);
+  }
+}
+
+function unregisterGlobalShortcuts() {
+  if (!keyboardListener) return;
+  
+  try {
+    keyboardListener.kill();
+    keyboardListener = null;
+    console.log('Global keyboard listener stopped');
+  } catch (err) {
+    console.error('Failed to stop global keyboard listener:', err);
+  }
+}
+
 app.whenReady().then(async () => {
   await soundboard.init();
   createWindow();
+  
+  // Register global shortcuts after window is created
+  registerGlobalShortcuts();
   
   // Check for updates 5 seconds after launch (gives window time to open)
   if (!app.isPackaged) {
@@ -190,6 +242,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', async () => {
+  unregisterGlobalShortcuts();
   await bot.logout();
   app.quit();
 });
