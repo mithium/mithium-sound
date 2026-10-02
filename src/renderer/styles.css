@@ -257,6 +257,36 @@ button:disabled {
   color: white;
 }
 
+.loaded-clip-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -8px 0 16px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.loaded-clip-banner.active {
+  border-color: var(--success);
+  color: var(--text);
+}
+
+.loaded-clip-banner #loaded-clip-hold {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--success);
+}
+
+.sound-btn.loaded {
+  border-color: var(--success);
+  box-shadow: 0 0 8px rgba(166, 227, 161, 0.25);
+}
+
 .volume-control {
   display: flex;
   align-items: center;

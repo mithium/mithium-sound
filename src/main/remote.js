@@ -6,6 +6,7 @@ const os = require('os');
 const QRCode = require('qrcode');
 const soundboard = require('./soundboard');
 const settings = require('./settings');
+const loadedClip = require('./loadedClip');
 
 let httpServer = null;
 let expressApp = null;
@@ -118,12 +119,16 @@ function startServer(opts = {}) {
   });
   
   // API: Stop playback
-  expressApp.post('/api/stop', authMiddleware, (req, res) => {
+  expressApp.post('/api/stop', authMiddleware, async (req, res) => {
     try {
-      const bot = require('./bot');
-      bot.stopSound();
-      
-      broadcastUpdate('stopped', {});
+      const service = loadedClip.getService();
+      if (service) {
+        await service.hardStop({ notifyRenderer: true });
+      } else {
+        const bot = require('./bot');
+        bot.stopSound();
+        broadcastUpdate('stopped', {});
+      }
       
       res.json({ success: true });
     } catch (err) {
@@ -155,13 +160,54 @@ function startServer(opts = {}) {
   expressApp.get('/api/status', authMiddleware, (req, res) => {
     try {
       const volume = settings.get('volume') || 100;
-      res.json({ 
+      res.json({
         volume,
         serverVersion: require('../../package.json').version,
+        ...loadedClip.getPublicState(),
       });
     } catch (err) {
       console.error('API error (status):', err);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // API: Set or clear the phone loaded clip (null clears it)
+  expressApp.post('/api/loaded-clip', authMiddleware, async (req, res) => {
+    try {
+      const service = loadedClip.getService();
+      if (!service) {
+        return res.status(503).json({ error: 'Loaded clip is not ready' });
+      }
+      const id = req.body && Object.prototype.hasOwnProperty.call(req.body, 'id')
+        ? req.body.id
+        : undefined;
+      if (id === undefined) {
+        return res.status(400).json({ error: 'Expected { id } (number or null)' });
+      }
+      const state = await service.setLoaded(id);
+      res.json({ success: true, ...state });
+    } catch (err) {
+      console.error('API error (loaded-clip):', err);
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  });
+
+  // API: Phone toggle for simulating V/T held until the clip ends. Defaults on.
+  expressApp.post('/api/auto-hold', authMiddleware, async (req, res) => {
+    try {
+      const service = loadedClip.getService();
+      if (!service) {
+        return res.status(503).json({ error: 'Loaded clip is not ready' });
+      }
+      const enabled = req.body ? req.body.enabled : undefined;
+      if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ error: 'Expected { enabled: boolean }' });
+      }
+      const state = await service.setAutoHold(enabled);
+      res.json({ success: true, ...state });
+    } catch (err) {
+      console.error('API error (auto-hold):', err);
+      res.status(err.status || 500).json({ error: err.message });
     }
   });
   
@@ -179,9 +225,10 @@ function startServer(opts = {}) {
       const sounds = soundboard.getAllSounds();
       const groups = soundboard.getAllGroups();
       const volume = settings.get('volume') || 100;
-      ws.send(JSON.stringify({ 
-        type: 'init', 
-        data: { sounds, groups, volume }
+      const clip = loadedClip.getPublicState();
+      ws.send(JSON.stringify({
+        type: 'init',
+        data: { sounds, groups, volume, ...clip },
       }));
     } catch (err) {
       console.error('WebSocket init error:', err);

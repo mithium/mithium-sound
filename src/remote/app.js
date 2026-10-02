@@ -5,6 +5,10 @@ let playingId = null;
 let ws = null;
 let reconnectTimeout = null;
 let volume = 100;
+let loadedClipId = null;
+let loadedClipName = null;
+let autoHold = true;
+let simulating = null;
 
 // DOM elements
 const soundGrid = document.getElementById('sound-grid');
@@ -15,9 +19,33 @@ const connectionStatus = document.getElementById('connection-status');
 const connectionText = document.getElementById('connection-text');
 const errorToast = document.getElementById('error-toast');
 const errorMessage = document.getElementById('error-message');
+const loadedPanel = document.getElementById('loaded-panel');
+const loadedName = document.getElementById('loaded-name');
+const loadedHoldState = document.getElementById('loaded-hold-state');
+const loadedClear = document.getElementById('loaded-clear');
+const autoHoldToggle = document.getElementById('auto-hold-toggle');
+const loadedHint = document.getElementById('loaded-hint');
 
-// API base URL (relative to current page)
 const API_BASE = '';
+
+function authHeaders(extra) {
+  const headers = { ...(extra || {}) };
+  if (authToken) headers['X-Auth-Token'] = authToken;
+  return headers;
+}
+
+async function postJson(path, body) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || `Request failed (${response.status})`);
+  }
+  return data;
+}
 
 // Get auth token from URL query params if present
 const urlParams = new URLSearchParams(window.location.search);
@@ -137,10 +165,26 @@ function createSoundButton(sound) {
   const btn = document.createElement('button');
   btn.className = 'sound-btn';
   if (sound.id === playingId) btn.classList.add('playing');
+  if (sound.id === loadedClipId) btn.classList.add('loaded');
   btn.textContent = sound.name;
   btn.dataset.id = sound.id;
   
   btn.addEventListener('click', () => playSound(sound.id));
+
+  const loadBtn = document.createElement('button');
+  loadBtn.type = 'button';
+  loadBtn.className = 'load-btn';
+  if (sound.id === loadedClipId) {
+    loadBtn.classList.add('active');
+    loadBtn.textContent = 'Loaded';
+  } else {
+    loadBtn.textContent = 'Load';
+  }
+  loadBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const nextId = sound.id === loadedClipId ? null : sound.id;
+    setLoadedClip(nextId);
+  });
   
   if (sound.source_type === 'youtube') {
     const badge = document.createElement('span');
@@ -150,7 +194,88 @@ function createSoundButton(sound) {
   }
   
   wrapper.appendChild(btn);
+  wrapper.appendChild(loadBtn);
   return wrapper;
+}
+
+function updateLoadedPanel() {
+  const known = sounds.find((sound) => sound.id === loadedClipId);
+  const name = known ? known.name : loadedClipName;
+  if (loadedClipId == null || !name) {
+    loadedPanel.classList.remove('active');
+    loadedName.textContent = 'None — tap Load on a clip';
+    loadedClear.disabled = true;
+  } else {
+    loadedPanel.classList.add('active');
+    loadedName.textContent = name;
+    loadedClear.disabled = false;
+  }
+
+  autoHoldToggle.checked = autoHold !== false;
+  if (simulating === 'v' || simulating === 't') {
+    loadedHoldState.textContent = `Holding ${simulating.toUpperCase()} on the PC`;
+  } else if (autoHold !== false) {
+    loadedHoldState.textContent = 'Auto-hold on — V or T stays down until the clip ends';
+  } else {
+    loadedHoldState.textContent = 'Auto-hold off — V or T plays without holding a key';
+  }
+
+  loadedHint.textContent = autoHold !== false
+    ? 'On: one press of V or T on the PC plays this clip and holds that key until it ends or you stop it.'
+    : 'Off: one press of V or T plays this clip and does not hold the key down.';
+}
+
+function applyLoadedState(data) {
+  if (!data) return;
+  if (Object.prototype.hasOwnProperty.call(data, 'id')) {
+    loadedClipId = data.id == null ? null : Number(data.id);
+    if (!Number.isFinite(loadedClipId)) loadedClipId = null;
+  }
+  if (Object.prototype.hasOwnProperty.call(data, 'name')) {
+    loadedClipName = data.name || null;
+  }
+  if (typeof data.autoHold === 'boolean') autoHold = data.autoHold;
+  if (Object.prototype.hasOwnProperty.call(data, 'simulating')) {
+    simulating = data.simulating || null;
+  }
+  updateLoadedPanel();
+  refreshLoadedButtons();
+}
+
+function refreshLoadedButtons() {
+  soundGrid.querySelectorAll('.sound-btn').forEach((btn) => {
+    const id = parseInt(btn.dataset.id, 10);
+    btn.classList.toggle('loaded', id === loadedClipId);
+  });
+  soundGrid.querySelectorAll('.load-btn').forEach((btn) => {
+    const wrapper = btn.parentElement;
+    const soundBtn = wrapper && wrapper.querySelector('.sound-btn');
+    const id = soundBtn ? parseInt(soundBtn.dataset.id, 10) : NaN;
+    const active = id === loadedClipId;
+    btn.classList.toggle('active', active);
+    btn.textContent = active ? 'Loaded' : 'Load';
+  });
+}
+
+async function setLoadedClip(id) {
+  try {
+    const data = await postJson('/api/loaded-clip', { id });
+    applyLoadedState(data);
+  } catch (err) {
+    console.error('Failed to set loaded clip:', err);
+    showError(err.message);
+  }
+}
+
+async function setAutoHold(enabled) {
+  try {
+    const data = await postJson('/api/auto-hold', { enabled });
+    applyLoadedState(data);
+  } catch (err) {
+    console.error('Failed to set auto-hold:', err);
+    autoHoldToggle.checked = autoHold !== false;
+    showError(err.message);
+  }
 }
 
 // Toggle group collapsed state (client-side only)
@@ -322,6 +447,7 @@ function handleWebSocketMessage(message) {
       volumeSlider.value = volume;
       volumeValue.textContent = `${volume}%`;
       renderSoundGrid();
+      applyLoadedState(data);
       break;
       
     case 'library':
@@ -329,6 +455,11 @@ function handleWebSocketMessage(message) {
       sounds = data.sounds || [];
       groups = data.groups || [];
       renderSoundGrid();
+      updateLoadedPanel();
+      break;
+
+    case 'loaded-clip':
+      applyLoadedState(data);
       break;
       
     case 'playing':
@@ -374,6 +505,14 @@ stopBtn.addEventListener('click', () => {
   stopPlayback();
 });
 
+loadedClear.addEventListener('click', () => {
+  setLoadedClip(null);
+});
+
+autoHoldToggle.addEventListener('change', () => {
+  setAutoHold(autoHoldToggle.checked);
+});
+
 // Initialize
 async function init() {
   // Fetch initial library
@@ -392,6 +531,7 @@ async function init() {
       volume = status.volume || 100;
       volumeSlider.value = volume;
       volumeValue.textContent = `${volume}%`;
+      applyLoadedState(status);
     }
   } catch (err) {
     console.error('Failed to fetch status:', err);

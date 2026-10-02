@@ -40,12 +40,16 @@
     <div class="toolbar">
       <button id="import-btn">Import Sound</button>
       <button id="create-group-btn">+ New Group</button>
-      <button id="stop-btn" class="stop-btn" title="Stop playback (Delete key)">⏹ Stop</button>
+      <button id="stop-btn" class="stop-btn" title="Stop playback and release a held V or T key">⏹ Stop</button>
       <div class="volume-control">
         <label for="volume-slider">Vol</label>
         <input type="range" id="volume-slider" min="0" max="150" value="100">
         <span id="volume-value">100%</span>
       </div>
+    </div>
+    <div id="loaded-clip-banner" class="loaded-clip-banner">
+      <span id="loaded-clip-text">No clip loaded. Set one on the phone remote.</span>
+      <span id="loaded-clip-hold">V/T auto-hold on</span>
     </div>
     <div id="sound-grid" class="sound-grid">
       <p class="empty-message">No sounds yet. Import some audio files or extract from YouTube.</p>
@@ -144,10 +148,13 @@
       </div>
       <div class="form-group">
         <label>
-          <input type="checkbox" id="setting-hold-to-play"> Hold-to-play mode for V/T keys
+          <input type="checkbox" id="setting-hold-to-play"> Hold-to-play for the armed clip
         </label>
         <p style="margin: 6px 0 0 22px; font-size: 12px; color: var(--text-muted); line-height: 1.5;">
-          When enabled, arm a sound clip by clicking its 🎯 button, then press and hold V or T to play while held. Release to stop immediately.
+          When no clip is loaded from the phone, V and T still control the clip you arm with 🎯. With this box on, hold V or T to play and release to stop. With it off, a tap of V or T plays that armed clip.
+          When the phone has loaded a clip, V and T play that clip instead: one press plays it through. Auto-hold (on by default, switched on the phone) also holds the real V or T key down until the clip ends.
+          Delete, Stop in this window, or Stop on the phone releases that key immediately. Mouse clicks do not stop playback.
+          These hooks work while the window is in the background or hidden to the tray. Quitting the app (tray menu → Quit) stops them.
         </p>
       </div>
       <details class="setup-guide" open>
