@@ -8,11 +8,8 @@ files:
 asarUnpack:
   - node_modules/sql.js/dist/**
   - node_modules/@snazzah/davey-win32-x64-msvc/**
+  - node_modules/ffmpeg-static/**
 extraResources:
-  - from: bin/win/
-    to: bin
-    filter:
-      - "**/*"
   - from: build/icon.png
     to: icon.png
 win:
