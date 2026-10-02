@@ -8,6 +8,7 @@ files:
 asarUnpack:
   - node_modules/sql.js/dist/**
   - node_modules/@snazzah/davey-win32-x64-msvc/**
+  - node_modules/node-global-key-listener/bin/**
 extraResources:
   - from: bin/win/ffmpeg.exe
     to: bin/ffmpeg.exe
