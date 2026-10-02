@@ -41,6 +41,11 @@ contextBridge.exposeInMainWorld('api', {
   updateCheck: () => ipcRenderer.invoke('update:check'),
   updateDownload: () => ipcRenderer.invoke('update:download'),
   updateInstall: () => ipcRenderer.invoke('update:install'),
+  
+  // Library Backup
+  libraryGetInfo: () => ipcRenderer.invoke('library:getInfo'),
+  libraryBackup: () => ipcRenderer.invoke('library:backup'),
+  libraryRestore: () => ipcRenderer.invoke('library:restore'),
 
   // Events from main
   onStatus: (cb) => {
