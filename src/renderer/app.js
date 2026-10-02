@@ -111,10 +111,8 @@ async function loadSettings() {
   return s;
 }
 
-$('#settings-save-btn').addEventListener('click', async () => {
-  const oldSettings = await window.api.settingsGet();
-  const oldOutputMode = oldSettings.outputMode || 'discord';
-  
+// Auto-save helper - shows brief feedback
+async function autoSaveSettings() {
   const data = {
     botToken: $('#setting-token').value,
     ytdlpPath: $('#setting-ytdlp').value,
@@ -125,27 +123,54 @@ $('#settings-save-btn').addEventListener('click', async () => {
     outputMode: $('#setting-output-mode').value,
     selectedDeviceId: $('#setting-device').value,
   };
-  await window.api.settingsSave(data);
-  holdToPlayActive = data.holdToPlayMode;
-  if (!holdToPlayActive) {
-    armedClipId = null;
-  }
   
-  // If output mode changed to "Local Device Only", leave Discord voice channel
-  if (oldOutputMode !== 'local' && data.outputMode === 'local') {
+  await window.api.settingsSave(data);
+  
+  // Show saved indicator briefly
+  const status = $('#settings-status');
+  status.textContent = 'Saved';
+  status.className = 'success-text';
+  status.classList.remove('hidden');
+  setTimeout(() => status.classList.add('hidden'), 1500);
+}
+
+// Output mode change handler - includes Discord leave logic
+async function handleOutputModeChange() {
+  const oldSettings = await window.api.settingsGet();
+  const oldOutputMode = oldSettings.outputMode || 'discord';
+  const newOutputMode = $('#setting-output-mode').value;
+  
+  await autoSaveSettings();
+  
+  // If switched to Local Device Only, leave Discord voice
+  if (oldOutputMode !== 'local' && newOutputMode === 'local') {
     const isInChannel = await window.api.botIsInChannel();
     if (isInChannel) {
       await window.api.botLeaveChannel();
     }
   }
-  
+}
+
+// Hold-to-play mode change handler
+async function handleHoldToPlayChange() {
+  await autoSaveSettings();
+  holdToPlayActive = $('#setting-hold-to-play').checked;
+  if (!holdToPlayActive) {
+    armedClipId = null;
+  }
   renderSoundGrid();
-  const status = $('#settings-status');
-  status.textContent = 'Settings saved!';
-  status.className = 'success-text';
-  status.classList.remove('hidden');
-  setTimeout(() => status.classList.add('hidden'), 2000);
-});
+}
+
+// Auto-save on all setting changes
+$('#setting-autoconnect').addEventListener('change', autoSaveSettings);
+$('#setting-output-mode').addEventListener('change', handleOutputModeChange);
+$('#setting-device').addEventListener('change', autoSaveSettings);
+$('#setting-hold-to-play').addEventListener('change', handleHoldToPlayChange);
+
+// Token, ytdlp, and ffmpeg save on blur (after typing)
+$('#setting-token').addEventListener('blur', autoSaveSettings);
+$('#setting-ytdlp').addEventListener('blur', autoSaveSettings);
+$('#setting-ffmpeg').addEventListener('blur', autoSaveSettings);
 
 // --- Volume ---
 volumeSlider.addEventListener('input', () => {
@@ -153,9 +178,7 @@ volumeSlider.addEventListener('input', () => {
 });
 
 volumeSlider.addEventListener('change', async () => {
-  const s = await window.api.settingsGet();
-  s.volume = parseInt(volumeSlider.value, 10);
-  await window.api.settingsSave(s);
+  await autoSaveSettings();
 });
 
 // --- Bot Login ---
