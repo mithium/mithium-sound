@@ -1,15 +1,14 @@
-// Generate PNG icons from SVG using sharp
-// sharp is available globally via netlify-cli
+// Regenerate icon.ico and the remote PWA icons from build/icon.png.
+// The 1024px PNG is the canonical Mithium Sound mark. icon.svg is unused
+// legacy artwork and must not overwrite the app icon.
 const path = require('path');
 const fs = require('fs');
 
-// Resolve sharp from global install
 const globalModules = path.join(process.env.HOME, '.nvm/versions/node/v24.12.0/lib/node_modules');
 let sharp;
 try {
   sharp = require(path.join(globalModules, 'netlify-cli/node_modules/sharp'));
 } catch {
-  // Try to find sharp in global modules
   const sharpPath = require('child_process')
     .execSync('find ~/.nvm -name "sharp" -path "*/node_modules/sharp/lib/index.js" 2>/dev/null | head -1')
     .toString().trim();
@@ -21,31 +20,29 @@ try {
   }
 }
 
-const buildDir = path.join(__dirname, '..', 'build');
-const svgPath = path.join(buildDir, 'icon.svg');
-const svg = fs.readFileSync(svgPath);
+const root = path.join(__dirname, '..');
+const buildDir = path.join(root, 'build');
+const remoteDir = path.join(root, 'src', 'remote');
+const masterPath = path.join(buildDir, 'icon.png');
+const master = fs.readFileSync(masterPath);
+
+async function pngAt(size) {
+  return sharp(master).resize(size, size).png().toBuffer();
+}
 
 async function main() {
-  // Generate 256x256 PNG (electron-builder default)
-  await sharp(svg).resize(256, 256).png().toFile(path.join(buildDir, 'icon.png'));
-  console.log('Generated icon.png (256x256)');
-
-  // Generate multiple sizes for ICO
   const sizes = [16, 32, 48, 64, 128, 256];
   const pngs = [];
   for (const size of sizes) {
-    const buf = await sharp(svg).resize(size, size).png().toBuffer();
+    const buf = await pngAt(size);
     pngs.push({ size, buf });
     console.log(`Generated ${size}x${size} buffer`);
   }
 
-  // Build ICO file manually
-  // ICO format: header + directory entries + image data
   const numImages = pngs.length;
   const headerSize = 6;
   const dirEntrySize = 16;
-  const dirSize = dirEntrySize * numImages;
-  let offset = headerSize + dirSize;
+  let offset = headerSize + dirEntrySize * numImages;
 
   const entries = [];
   for (const { size, buf } of pngs) {
@@ -54,21 +51,20 @@ async function main() {
   }
 
   const ico = Buffer.alloc(offset);
-  // Header: reserved(2) + type(2) + count(2)
-  ico.writeUInt16LE(0, 0);     // reserved
-  ico.writeUInt16LE(1, 2);     // type: 1 = ICO
+  ico.writeUInt16LE(0, 0);
+  ico.writeUInt16LE(1, 2);
   ico.writeUInt16LE(numImages, 4);
 
   let pos = headerSize;
   for (const entry of entries) {
-    ico.writeUInt8(entry.size >= 256 ? 0 : entry.size, pos);      // width (0 = 256)
-    ico.writeUInt8(entry.size >= 256 ? 0 : entry.size, pos + 1);  // height
-    ico.writeUInt8(0, pos + 2);      // color palette
-    ico.writeUInt8(0, pos + 3);      // reserved
-    ico.writeUInt16LE(1, pos + 4);   // color planes
-    ico.writeUInt16LE(32, pos + 6);  // bits per pixel
-    ico.writeUInt32LE(entry.buf.length, pos + 8);  // size of image data
-    ico.writeUInt32LE(entry.offset, pos + 12);     // offset of image data
+    ico.writeUInt8(entry.size >= 256 ? 0 : entry.size, pos);
+    ico.writeUInt8(entry.size >= 256 ? 0 : entry.size, pos + 1);
+    ico.writeUInt8(0, pos + 2);
+    ico.writeUInt8(0, pos + 3);
+    ico.writeUInt16LE(1, pos + 4);
+    ico.writeUInt16LE(32, pos + 6);
+    ico.writeUInt32LE(entry.buf.length, pos + 8);
+    ico.writeUInt32LE(entry.offset, pos + 12);
     pos += dirEntrySize;
   }
 
@@ -78,6 +74,13 @@ async function main() {
 
   fs.writeFileSync(path.join(buildDir, 'icon.ico'), ico);
   console.log('Generated icon.ico');
+
+  for (const size of [192, 512]) {
+    const buf = await pngAt(size);
+    const out = path.join(remoteDir, `icon-${size}.png`);
+    fs.writeFileSync(out, buf);
+    console.log(`Generated ${path.relative(root, out)}`);
+  }
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
