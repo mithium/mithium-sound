@@ -1,12 +1,10 @@
-// HTTP client for the Mithium Sound Home Server.
-// Sends only library records. The Discord bot token is never attached.
+// HTTP client for mithium-sound-library.
+// Wire format is API.md: Bearer auth, revision cursor, no Discord token,
+// and no client-supplied createdAt / updatedAt.
 
-const BANNED_KEYS = new Set([
-  'botToken',
-  'bot_token',
-  'discordToken',
-  'discord_token',
-]);
+const { assertWireBody } = require('./merge');
+
+const MAX_AUDIO_BYTES = 32 * 1024 * 1024;
 
 class HomeServerError extends Error {
   constructor(message, status, httpStatus) {
@@ -58,23 +56,10 @@ function classifyNetwork(err) {
   return 'error';
 }
 
-function stripBanned(value) {
-  if (Array.isArray(value)) return value.map(stripBanned);
-  if (value && typeof value === 'object' && !Buffer.isBuffer(value)) {
-    const out = {};
-    for (const [key, child] of Object.entries(value)) {
-      if (BANNED_KEYS.has(key)) continue;
-      out[key] = stripBanned(child);
-    }
-    return out;
-  }
-  return value;
-}
-
 function assertNoSecrets(text, secrets) {
   for (const secret of secrets) {
     if (!secret || String(secret).length < 8) continue;
-    if (text.includes(String(secret))) {
+    if (String(text).includes(String(secret))) {
       throw new HomeServerError(
         'Refusing to send the Discord bot token to the Home Server',
         'error'
@@ -83,8 +68,27 @@ function assertNoSecrets(text, secrets) {
   }
 }
 
+function filenameFromClip(clip) {
+  const raw = clip && (clip.filename || clip.audioPath) ? String(clip.filename || clip.audioPath) : '';
+  const base = raw.split(/[/\\]/).pop();
+  if (base && base !== '.' && base !== '..') return base;
+  return 'clip.wav';
+}
+
+function audioForm(fields, bytes, filename) {
+  assertWireBody(fields);
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    if (value == null || value === '') continue;
+    form.append(key, String(value));
+  }
+  const body = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || []);
+  form.append('file', new Blob([body]), filename || 'clip.wav');
+  return form;
+}
+
 function createClient({ baseUrl, token, forbiddenSecrets, fetchImpl } = {}) {
-  const secrets = (forbiddenSecrets || []).map((s) => String(s || '')).filter((s) => s.length >= 8);
+  const secrets = (forbiddenSecrets || []).map((value) => String(value || '')).filter((value) => value.length >= 8);
   const doFetch = fetchImpl || fetch;
   let resolvedBase = null;
 
@@ -108,17 +112,19 @@ function createClient({ baseUrl, token, forbiddenSecrets, fetchImpl } = {}) {
     };
   }
 
-  async function request(pathname, { method = 'GET', json, body, headers, timeoutMs = 15000, expect = 'json' } = {}) {
+  async function request(pathname, { method = 'GET', json, form, timeoutMs = 15000, expect = 'json' } = {}) {
     const url = base() + pathname;
     assertNoSecrets(url, secrets);
-    const finalHeaders = { ...authHeaders(), ...(headers || {}) };
-    let payload = body;
+    const headers = { ...authHeaders() };
+    let payload;
     if (json !== undefined) {
-      const safe = stripBanned(json);
-      const text = JSON.stringify(safe);
+      assertWireBody(json);
+      const text = JSON.stringify(json);
       assertNoSecrets(text, secrets);
       payload = text;
-      finalHeaders['Content-Type'] = 'application/json';
+      headers['Content-Type'] = 'application/json';
+    } else if (form) {
+      payload = form;
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -126,7 +132,7 @@ function createClient({ baseUrl, token, forbiddenSecrets, fetchImpl } = {}) {
     try {
       response = await doFetch(url, {
         method,
-        headers: finalHeaders,
+        headers,
         body: payload,
         signal: controller.signal,
         redirect: 'error',
@@ -153,18 +159,19 @@ function createClient({ baseUrl, token, forbiddenSecrets, fetchImpl } = {}) {
       const message = response.status === 401 || response.status === 403
         ? 'Home Server rejected the token'
         : `Home Server returned HTTP ${response.status}${detail ? `: ${detail.slice(0, 180)}` : ''}`;
-      throw new HomeServerError(message, offlineHttp ? 'offline' : 'error', response.status);
+      const error = new HomeServerError(message, offlineHttp ? 'offline' : 'error', response.status);
+      throw error;
     }
 
     if (expect === 'buffer') {
       const arrayBuffer = await response.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
-      if (buffer.length > 100 * 1024 * 1024) {
+      if (buffer.length > MAX_AUDIO_BYTES) {
         throw new HomeServerError('Audio file is too large', 'error');
       }
       return buffer;
     }
-    if (expect === 'empty') return null;
+    if (expect === 'empty' || response.status === 204) return null;
     const text = await response.text();
     if (!text) return {};
     try {
@@ -178,18 +185,11 @@ function createClient({ baseUrl, token, forbiddenSecrets, fetchImpl } = {}) {
     health() {
       return request('/api/health', { timeoutMs: 3000 });
     },
-    async getLibrary({ since } = {}) {
-      if (since) {
-        try {
-          return await request(`/api/sync?since=${encodeURIComponent(since)}`);
-        } catch (err) {
-          if (err.httpStatus === 404 || err.httpStatus === 400) {
-            return request('/api/library');
-          }
-          throw err;
-        }
-      }
+    getLibrary() {
       return request('/api/library');
+    },
+    getSync(sinceRevision) {
+      return request(`/api/sync?sinceRevision=${encodeURIComponent(sinceRevision)}`);
     },
     getAudio(id) {
       return request(`/api/clips/${encodeURIComponent(id)}/audio`, {
@@ -197,41 +197,56 @@ function createClient({ baseUrl, token, forbiddenSecrets, fetchImpl } = {}) {
         timeoutMs: 60000,
       });
     },
-    putClip(clip) {
-      return request(`/api/clips/${encodeURIComponent(clip.id)}`, {
-        method: 'PUT',
-        json: clip,
+    createGroup(group) {
+      return request('/api/groups', { method: 'POST', json: group });
+    },
+    patchGroup(id, body) {
+      return request(`/api/groups/${encodeURIComponent(id)}`, { method: 'PATCH', json: body });
+    },
+    deleteGroup(id) {
+      return request(`/api/groups/${encodeURIComponent(id)}`, { method: 'DELETE', expect: 'empty' });
+    },
+    createClip({ id, name, groupId, trimStartMs, trimEndMs, filename, bytes }) {
+      if (!bytes || !bytes.length) {
+        throw new HomeServerError('Clip has no audio to upload', 'error');
+      }
+      if (bytes.length > MAX_AUDIO_BYTES) {
+        throw new HomeServerError('Audio file is too large', 'error');
+      }
+      const fields = { id, name, groupId };
+      if (trimStartMs != null) fields.trimStartMs = trimStartMs;
+      if (trimEndMs != null) fields.trimEndMs = trimEndMs;
+      assertNoSecrets(JSON.stringify(fields), secrets);
+      return request('/api/clips', {
+        method: 'POST',
+        form: audioForm(fields, bytes, filenameFromClip({ filename })),
+        timeoutMs: 60000,
       });
     },
-    putAudio(id, bytes, contentHash) {
-      const body = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+    patchClip(id, body) {
+      return request(`/api/clips/${encodeURIComponent(id)}`, { method: 'PATCH', json: body });
+    },
+    putAudio(id, bytes, filename) {
+      if (!bytes || !bytes.length) {
+        throw new HomeServerError('Clip has no audio to upload', 'error');
+      }
+      if (bytes.length > MAX_AUDIO_BYTES) {
+        throw new HomeServerError('Audio file is too large', 'error');
+      }
       return request(`/api/clips/${encodeURIComponent(id)}/audio`, {
         method: 'PUT',
-        body,
-        expect: 'json',
+        form: audioForm({}, bytes, filenameFromClip({ filename })),
         timeoutMs: 60000,
-        headers: {
-          'Content-Type': 'application/octet-stream',
-          'X-Content-Hash': contentHash || '',
-        },
       });
     },
     deleteClip(id) {
-      return request(`/api/clips/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    },
-    putGroup(group) {
-      return request(`/api/groups/${encodeURIComponent(group.id)}`, {
-        method: 'PUT',
-        json: group,
-      });
-    },
-    deleteGroup(id) {
-      return request(`/api/groups/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      return request(`/api/clips/${encodeURIComponent(id)}`, { method: 'DELETE', expect: 'empty' });
     },
   };
 }
 
 module.exports = {
+  MAX_AUDIO_BYTES,
   HomeServerError,
   createClient,
   parseBaseUrl,

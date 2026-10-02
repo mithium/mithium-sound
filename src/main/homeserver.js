@@ -74,14 +74,21 @@ function onStatus(callback) {
 
 function createStore() {
   return {
+    getServerRevision() {
+      const value = loadState().serverRevision;
+      return Number.isInteger(value) ? value : null;
+    },
+    setServerRevision(value) {
+      if (Number.isInteger(value)) saveState({ serverRevision: value });
+    },
     getSnapshot() {
       return soundboard.getSyncSnapshot();
     },
-    applyGroup(group) {
-      soundboard.applySyncedGroup(group);
+    applyGroup(group, baseUpdatedAt) {
+      soundboard.applySyncedGroup(group, baseUpdatedAt);
     },
-    applyClip(clip) {
-      soundboard.applySyncedClip(clip);
+    applyClip(clip, baseUpdatedAt) {
+      soundboard.applySyncedClip(clip, baseUpdatedAt);
     },
     audioHash(id) {
       return soundboard.getAudioHash(id);
@@ -165,7 +172,7 @@ async function runOnce() {
       pulled: 0,
       pushed: 0,
       libraryChanged: false,
-      revisedAt: null,
+      serverRevision: null,
     };
   }
 
@@ -175,7 +182,9 @@ async function runOnce() {
   };
   if (result.status === 'connected') {
     nextState.lastSyncAt = new Date().toISOString();
-    if (result.revisedAt) nextState.lastRevisedAt = result.revisedAt;
+  }
+  if (Number.isInteger(result.serverRevision) && result.status !== 'offline') {
+    nextState.serverRevision = result.serverRevision;
   }
   const saved = saveState(nextState);
   const payload = {

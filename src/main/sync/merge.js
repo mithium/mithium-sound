@@ -1,169 +1,198 @@
-// Home Server sync rule (last-write-wins, merge, never drop local-only data):
+// Home Server sync against mithium-sound-library.
 //
-// Identity is the stable sync id (UUID), not the local SQLite row id.
-// 1. The record with the newer updatedAt wins.
-// 2. If updatedAt ties, the lexicographically greater contentHash wins
-//    (missing hash counts as '').
-// 3. If those also tie, keep the local row and do not transfer it.
-//    A dirty local row is still pushed so an offline edit is not stuck.
-// 4. A clip or group that exists only locally is kept. It is pushed when it
-//    has local edits (dirty) or has never been acknowledged (synced = false).
-//    A clean, previously synced row that the server simply omits is kept
-//    and is not deleted and not re-uploaded.
-// 5. A row that exists only on the server is inserted locally.
-// 6. Deletes are tombstones (deletedAt). Absence is not a delete. A tombstone
-//    wins only when rule 1–2 says it is newer than the live row.
+// The server owns createdAt, updatedAt, and the library revision. Those
+// timestamps are never sent. The cursor is the integer serverRevision.
+//
+// 1. First contact (no stored revision) pulls GET /api/library. That snapshot
+//    has no tombstones. Rows that exist only on this PC are kept and uploaded.
+// 2. Later polls use GET /api/sync?sinceRevision=. Apply upserts and deletes
+//    in revision order. The higher revision wins, including over a dirty local
+//    edit. A delete is only a tombstone from that feed.
+// 3. A missing row in the full library is not a delete. If the tombstone list
+//    is truncated (5000) or the server revision moved backwards, reconcile
+//    from GET /api/library: drop clean rows that were previously synced and
+//    are gone. Dirty local edits and never-synced clips stay.
+// 4. Push with POST, PATCH, PUT audio, and DELETE. DELETE is 204.
 
-function parseTime(value) {
-  const t = Date.parse(value || '');
-  return Number.isNaN(t) ? 0 : t;
+const TOMBSTONE_CAP = 5000;
+
+const WIRE_FORBIDDEN = [
+  'createdAt',
+  'updatedAt',
+  'botToken',
+  'bot_token',
+  'discordToken',
+  'discord_token',
+  'contentHash',
+  'youtubeUrl',
+  'sourceType',
+  'hotkey',
+  'volume',
+  'position',
+  'deletedAt',
+];
+
+function canonicalId(value) {
+  if (value == null || value === '') return '';
+  return String(value).toLowerCase();
 }
 
-function normStr(value) {
-  if (value == null || value === '') return null;
-  return String(value);
+function asInt(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
 }
 
-function clipPayload(clip) {
+function normalizeClip(wire) {
   return {
-    id: String(clip.id),
-    groupId: normStr(clip.groupId),
-    name: clip.name == null ? '' : String(clip.name),
-    contentHash: normStr(clip.contentHash),
-    sourceType: normStr(clip.sourceType) || 'local',
-    youtubeUrl: normStr(clip.youtubeUrl),
-    trimStart: normStr(clip.trimStart),
-    trimEnd: normStr(clip.trimEnd),
-    volume: clip.volume == null || clip.volume === '' ? null : Number(clip.volume),
-    hotkey: normStr(clip.hotkey),
-    position: Number(clip.position) || 0,
-    deletedAt: normStr(clip.deletedAt),
-  };
-}
-
-function groupPayload(group) {
-  return {
-    id: String(group.id),
-    name: group.name == null ? '' : String(group.name),
-    position: Number(group.position) || 0,
-    deletedAt: normStr(group.deletedAt),
-  };
-}
-
-function samePayload(local, remote, kind) {
-  const shape = kind === 'group' ? groupPayload : clipPayload;
-  return JSON.stringify(shape(local)) === JSON.stringify(shape(remote));
-}
-
-/**
- * @returns {'local' | 'remote' | 'equal'}
- */
-function pickWinner(local, remote) {
-  const localTime = parseTime(local && local.updatedAt);
-  const remoteTime = parseTime(remote && remote.updatedAt);
-  if (localTime > remoteTime) return 'local';
-  if (remoteTime > localTime) return 'remote';
-  const localHash = (local && local.contentHash) || '';
-  const remoteHash = (remote && remote.contentHash) || '';
-  if (localHash > remoteHash) return 'local';
-  if (remoteHash > localHash) return 'remote';
-  return 'equal';
-}
-
-function normalizeIncoming(record) {
-  return {
-    ...record,
-    id: String(record.id),
-    updatedAt: record.updatedAt || '1970-01-01T00:00:00.000Z',
-    deletedAt: record.deletedAt || null,
-    contentHash: record.contentHash || null,
+    id: canonicalId(wire.id),
+    groupId: wire.groupId ? canonicalId(wire.groupId) : null,
+    name: wire.name == null ? '' : String(wire.name),
+    hash: wire.hash || null,
+    trimStartMs: wire.trimStartMs == null ? null : asInt(wire.trimStartMs, null),
+    trimEndMs: wire.trimEndMs == null ? null : asInt(wire.trimEndMs, null),
+    durationMs: wire.durationMs == null ? null : asInt(wire.durationMs, null),
+    mimeType: wire.mimeType || null,
+    sizeBytes: wire.sizeBytes == null ? null : asInt(wire.sizeBytes, null),
+    audioPath: wire.audioPath || null,
+    revision: asInt(wire.revision, 0),
+    updatedAt: wire.updatedAt || null,
+    deletedAt: wire.deletedAt || null,
     dirty: false,
     synced: true,
   };
 }
 
-/**
- * Decide which rows to pull and which to push.
- * remoteRecords may be a full snapshot or an incremental delta.
- * Omission from remoteRecords is never treated as a delete.
- */
-function planSync(localRecords, remoteRecords, kind) {
-  const localById = new Map();
-  for (const record of localRecords || []) {
-    if (record && record.id) localById.set(String(record.id), record);
-  }
-  const remoteById = new Map();
-  for (const record of remoteRecords || []) {
-    if (record && record.id) remoteById.set(String(record.id), normalizeIncoming(record));
-  }
-
-  const pulls = [];
-  const pushes = [];
-
-  for (const [id, remote] of remoteById) {
-    const local = localById.get(id);
-    if (!local) {
-      pulls.push(remote);
-      continue;
-    }
-    const winner = pickWinner(local, remote);
-    if (winner === 'remote') {
-      pulls.push(remote);
-      continue;
-    }
-    if (winner === 'local' && (!samePayload(local, remote, kind) || local.dirty)) {
-      pushes.push(local);
-      continue;
-    }
-    if (winner === 'equal' && local.dirty && !samePayload(local, remote, kind)) {
-      pushes.push(local);
-    }
-  }
-
-  for (const [id, local] of localById) {
-    if (remoteById.has(id)) continue;
-    if (local.dirty || !local.synced) pushes.push(local);
-  }
-
-  return { pulls, pushes };
-}
-
-function publicClip(clip) {
+function normalizeGroup(wire) {
   return {
-    id: clip.id,
-    groupId: clip.groupId || null,
-    name: clip.name,
-    filename: clip.filename || null,
-    contentHash: clip.contentHash || null,
-    sourceType: clip.sourceType || 'local',
-    youtubeUrl: clip.youtubeUrl || null,
-    trimStart: clip.trimStart || null,
-    trimEnd: clip.trimEnd || null,
-    volume: clip.volume == null ? null : clip.volume,
-    hotkey: clip.hotkey || null,
-    position: clip.position || 0,
-    updatedAt: clip.updatedAt,
-    deletedAt: clip.deletedAt || null,
+    id: canonicalId(wire.id),
+    name: wire.name == null ? '' : String(wire.name),
+    sortOrder: asInt(wire.sortOrder, 0),
+    revision: asInt(wire.revision, 0),
+    updatedAt: wire.updatedAt || null,
+    deletedAt: wire.deletedAt || null,
+    dirty: false,
+    synced: true,
   };
 }
 
-function publicGroup(group) {
-  return {
-    id: group.id,
-    name: group.name,
-    position: group.position || 0,
-    updatedAt: group.updatedAt,
-    deletedAt: group.deletedAt || null,
+function remoteWins(local, remoteRevision) {
+  if (!local) return true;
+  const localRevision = asInt(local.revision, 0);
+  const remote = asInt(remoteRevision, 0);
+  if (local.dirty && localRevision >= remote) return false;
+  if (!local.dirty && localRevision >= remote) return false;
+  return true;
+}
+
+function incrementalEvents(body) {
+  const events = [];
+  const groups = (body && body.groups) || {};
+  const clips = (body && body.clips) || {};
+  for (const group of groups.upserted || []) {
+    const record = normalizeGroup(group);
+    events.push({ kind: 'group', op: 'upsert', revision: record.revision, record });
+  }
+  for (const group of groups.deleted || []) {
+    events.push({
+      kind: 'group',
+      op: 'delete',
+      revision: asInt(group.revision, 0),
+      record: {
+        id: canonicalId(group.id),
+        revision: asInt(group.revision, 0),
+        deletedAt: group.deletedAt || null,
+      },
+    });
+  }
+  for (const clip of clips.upserted || []) {
+    const record = normalizeClip(clip);
+    events.push({ kind: 'clip', op: 'upsert', revision: record.revision, record });
+  }
+  for (const clip of clips.deleted || []) {
+    events.push({
+      kind: 'clip',
+      op: 'delete',
+      revision: asInt(clip.revision, 0),
+      record: {
+        id: canonicalId(clip.id),
+        revision: asInt(clip.revision, 0),
+        deletedAt: clip.deletedAt || null,
+      },
+    });
+  }
+  events.sort((a, b) => a.revision - b.revision || (a.op === 'delete' ? 1 : 0) - (b.op === 'delete' ? 1 : 0));
+  return events;
+}
+
+function tombstonesTruncated(body) {
+  const groups = (body && body.groups && body.groups.deleted) || [];
+  const clips = (body && body.clips && body.clips.deleted) || [];
+  return groups.length + clips.length >= TOMBSTONE_CAP;
+}
+
+function reconcileDeletes(localRecords, remoteRecords) {
+  const remoteIds = new Set((remoteRecords || []).map((record) => canonicalId(record.id)));
+  const remove = [];
+  for (const local of localRecords || []) {
+    if (!local || local.deletedAt) continue;
+    if (!local.synced || local.revision == null) continue;
+    if (local.dirty) continue;
+    if (!remoteIds.has(canonicalId(local.id))) remove.push(local);
+  }
+  return remove;
+}
+
+function assertWireBody(body) {
+  for (const key of Object.keys(body || {})) {
+    if (WIRE_FORBIDDEN.includes(key)) {
+      const error = new Error(`Refusing to send ${key} to the Home Server`);
+      error.status = 'error';
+      throw error;
+    }
+  }
+}
+
+function groupWriteBody(group) {
+  const body = {
+    id: canonicalId(group.id),
+    name: String(group.name || '').trim(),
+    sortOrder: asInt(group.sortOrder, 0),
   };
+  assertWireBody(body);
+  return body;
+}
+
+function clipPatchBody(clip) {
+  const body = {};
+  const name = String(clip.name || '').trim();
+  if (name) body.name = name;
+  if (clip.groupId) body.groupId = canonicalId(clip.groupId);
+  if (clip.trimStartMs != null) body.trimStartMs = asInt(clip.trimStartMs, 0);
+  if (clip.trimEndMs != null) body.trimEndMs = asInt(clip.trimEndMs, 0);
+  assertWireBody(body);
+  return body;
+}
+
+function fallbackGroupId(groups) {
+  const live = (groups || []).filter((group) => group && !group.deletedAt);
+  const ungrouped = live.find((group) => group.name === 'Ungrouped');
+  if (ungrouped) return ungrouped.id;
+  live.sort((a, b) => asInt(a.sortOrder, 0) - asInt(b.sortOrder, 0));
+  return live.length ? live[0].id : null;
 }
 
 module.exports = {
-  pickWinner,
-  planSync,
-  samePayload,
-  clipPayload,
-  groupPayload,
-  publicClip,
-  publicGroup,
-  normalizeIncoming,
+  TOMBSTONE_CAP,
+  WIRE_FORBIDDEN,
+  canonicalId,
+  normalizeClip,
+  normalizeGroup,
+  remoteWins,
+  incrementalEvents,
+  tombstonesTruncated,
+  reconcileDeletes,
+  assertWireBody,
+  groupWriteBody,
+  clipPatchBody,
+  fallbackGroupId,
 };

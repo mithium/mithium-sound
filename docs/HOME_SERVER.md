@@ -2,188 +2,133 @@
 
 Mithium Sound stays a local soundboard. Discord playback, local-device playback, global hotkeys, and the clip grid always read the library on this PC (`%APPDATA%\mithium-sound\`).
 
-Home Server is an optional LAN sync target for a home-lab service (and, later, a phone PWA hosted in the lab). It is not the in-app LAN Web Remote. The remote still serves a phone page from this PC while the PC is on. Home Server is a separate machine the Windows app talks to when it can.
+Home Server syncs that library with the lab service [mithium-sound-library](https://github.com/mithium/mithium-sound-library). It is not the in-app LAN Web Remote. The remote still serves a phone page from this PC while the PC is on.
 
-If the Home Server is off, unreachable, or not configured, the app does not block, prompt, or skip playback. Status shows **Offline** (or **Disabled** when the toggle is off). Edits made on this PC stay in the local database and are pushed on the next successful sync.
+If the server is off, unreachable, or not configured, the app does not block playback. Status shows **Offline** (or **Disabled** when the toggle is off). Edits made on this PC stay queued in the local database until the next successful sync.
 
-## Settings
-
-Settings → **Home Server** (separate from **LAN Web Remote Control**):
-
-| Field | Purpose |
-| --- | --- |
-| Enable Home Server sync | Turns sync on or off. Off means no network calls. |
-| Base URL | LAN origin of the library service. On the Windows PC use `http://192.168.0.211:4092`. |
-| Auth token | Shared secret sent as `Authorization: Bearer`. Not the Discord bot token. |
-| Connection | **Connected**, **Offline**, or **Error** |
-| Sync now | Pulls the remote library, then pushes queued local edits |
-
-The URL and token are stored in `%APPDATA%\mithium-sound\settings.json` next to the Discord bot token and the LAN remote PIN (`homeServerUrl`, `homeServerToken`, `homeServerEnabled`). The same file is the existing secret store. Sync state (last result, server revision) is in `homeserver-state.json` beside it so a normal settings save cannot wipe it.
-
-The Discord bot token is never placed in a Home Server request. The client sends only clip and group records. If the Home Server token is the same string as the bot token, sync refuses before opening a connection. If a library payload would contain the bot token string, that request is refused.
-
-The client authenticates with both headers, so a server may check either:
-
-```
-Authorization: Bearer <token>
-X-Api-Key: <token>
-```
-
-Only `http:` and `https:` URLs are allowed. Put the secret in the token field, not in the URL.
-
-## Planned lab service
-
-The home lab is building the library service in the private repo `mithium/mithium-sound-library`. It is planned to serve the same routes as this document (`/api/health`, `/api/library`, clip audio, clip and group create/update/delete, and optional `GET /api/sync?since=`).
+## Where to point the Windows app
 
 | Client | Base URL |
 | --- | --- |
 | This Windows app, on the LAN | `http://192.168.0.211:4092` |
 | Phone PWA, over Tailscale | `http://100.73.61.67:4092` |
 
-Auth for that service is `Authorization: Bearer <API_KEY>`. This app already sends that header (and `X-Api-Key` with the same value). Paste the API key into the Home Server token field. Do not paste the Discord bot token.
+Settings → **Home Server** (separate from **LAN Web Remote Control**):
 
-The phone PWA is not part of this pull request. Until `mithium-sound-library` is up, use the local stub below.
+| Field | Purpose |
+| --- | --- |
+| Enable Home Server sync | Off means no network calls. |
+| Base URL | `http://192.168.0.211:4092` for this PC. |
+| Auth token | The library API key. Not the Discord bot token. |
+| Connection | **Connected**, **Offline**, or **Error** |
+| Sync now | Pulls, then pushes queued local edits |
+
+The URL and token are stored in `%APPDATA%\mithium-sound\settings.json` with the other secrets (`homeServerUrl`, `homeServerToken`, `homeServerEnabled`). The sync cursor is `serverRevision` in `homeserver-state.json`.
+
+Auth headers (the lab uses the bearer token when both are present):
+
+```
+Authorization: Bearer <API_KEY>
+X-Api-Key: <API_KEY>
+```
+
+The Discord bot token is never placed on this wire. The client also refuses to send `createdAt` or `updatedAt`. The server assigns those. If the Home Server token is the same string as the bot token, sync refuses before opening a connection.
+
+YouTube URL, source type, per-clip volume, hotkey, and the on-screen clip order stay on this PC. They are not library fields.
 
 ## Sync rule
 
-Identity is a stable `id` (UUID), not the local SQLite row id. The Windows UI keeps using local integer ids for playback.
+Identity is the clip or group UUID, not the local SQLite row id.
 
-1. The record with the newer `updatedAt` wins (last write wins).
-2. If `updatedAt` ties, the lexicographically greater `contentHash` wins. A missing hash counts as an empty string.
-3. If those also tie, keep the local row and do not transfer it. A row with unsent local edits is still pushed.
-4. A clip or group that exists only on this PC is kept. It is uploaded when it has local edits or has never been acknowledged by the server. A clean row that the server simply omits is **not** deleted and is **not** re-uploaded.
-5. A row that exists only on the server is inserted locally, and its audio is downloaded when the content hash differs from the local file.
-6. Deletes are tombstones (`deletedAt`). A tombstone is a normal record in rules 1–2. **Absence is not a delete.** A local-only clip is never removed just because the server snapshot does not list it.
+1. The first sync calls `GET /api/library` and stores `revision`. That snapshot has no tombstones. Clips that exist only on this PC are kept and uploaded.
+2. Later syncs call `GET /api/sync?sinceRevision=<stored revision>`. Upserts and deletes are applied in `revision` order. The higher revision wins, including over an edit made offline on this PC.
+3. A row missing from the full library is not a delete. Deletes arrive as tombstones on `GET /api/sync`. The server keeps the latest 5000 tombstones. If that list is full, or the server revision moves backwards, the client reconciles from `GET /api/library` and drops clean rows it had already synced that the server no longer has. Dirty local edits and never-uploaded clips stay.
+4. Audio is downloaded from `GET /api/clips/:id/audio` when the local SHA-256 does not match `hash`.
+5. Local edits push with `POST /api/groups`, `PATCH /api/groups/:id`, `POST /api/clips` (multipart file), `PATCH /api/clips/:id`, `PUT /api/clips/:id/audio` (multipart file), and `DELETE` (`204`). A group delete is sent only after its clips have moved, because the server returns `409` while a group still has clips.
 
-Local edits set `updatedAt` to the current time and mark the row dirty. That dirty flag is the outbound queue. It survives restarts. A failed sync leaves the flag set and leaves playback on the local files.
+`hash` in the lab API is stored locally as the clip content hash. `trimStartMs` / `trimEndMs` are milliseconds (`trimEndMs` exclusive). Group `sortOrder` is the local group position.
 
-Deleting a clip in the app hides it immediately and removes the audio file from disk. The tombstone row remains until the server has acknowledged it, so a later sync can publish the delete. If the server has a newer copy, that copy is downloaded again.
+## HTTP contract
 
-`collapsed` on a group is device-local UI state and is not part of the sync comparison.
-
-The Windows client always pulls `GET /api/library` (a full snapshot). Metadata for a soundboard is small, and a full snapshot makes rule 4 unambiguous. `GET /api/sync?since=` is still part of the contract for other clients.
-
-## Clip and group fields
-
-Clips align with the app's sound rows:
-
-| API field | Local column | Notes |
-| --- | --- | --- |
-| `id` | `sync_id` | UUID |
-| `groupId` | `groups.sync_id` for `group_id` | `null` if ungrouped |
-| `name` | `name` | |
-| `filename` | `filename` | Hint for the file extension. Playback uses the local file. |
-| `contentHash` | `content_hash` | SHA-256 hex of the audio bytes |
-| `sourceType` | `source_type` | `local` or `youtube` |
-| `youtubeUrl` | `youtube_url` | |
-| `trimStart`, `trimEnd` | `youtube_start`, `youtube_end` | Trim stored with the clip |
-| `volume` | `clip_volume` | Optional per-clip value. `null` means the app volume slider. Playback is unchanged when this is null. |
-| `hotkey` | `hotkey` | Optional. Stored and synced for the lab editor. Windows global hotkeys remain V / T / Delete. |
-| `position` | `position` | |
-| `updatedAt` | `updated_at` | ISO-8601 |
-| `deletedAt` | `deleted_at` | ISO-8601 tombstone, or `null` |
-
-Groups: `id`, `name`, `position`, `updatedAt`, `deletedAt`.
-
-## HTTP API
-
-JSON unless noted. Errors use `{ "error": "..." }`.
+Authoritative detail is `API.md` in `mithium/mithium-sound-library`. This client implements that shape.
 
 ### `GET /api/health`
 
 ```json
-{ "ok": true }
+{ "ok": true, "version": "0.1.0" }
 ```
 
-A connection failure is **Offline**. HTTP 401/403 is **Error** (bad token). HTTP 502/503/504 is **Offline**.
+Connection failure is **Offline**. HTTP 401 is **Error**.
 
 ### `GET /api/library`
 
-Full snapshot, including tombstones.
+Full snapshot of live groups and clips. No tombstones. `revision` is the next sync cursor.
 
 ```json
 {
-  "revisedAt": "2026-10-02T18:00:00.000Z",
-  "groups": [
-    {
-      "id": "2b1c...",
-      "name": "Bits",
-      "position": 0,
-      "updatedAt": "2026-10-02T18:00:00.000Z",
-      "deletedAt": null
-    }
-  ],
-  "clips": [
-    {
-      "id": "9f0e...",
-      "groupId": "2b1c...",
-      "name": "Airhorn",
-      "filename": "airhorn.mp3",
-      "contentHash": "<sha256 hex>",
-      "sourceType": "local",
-      "youtubeUrl": null,
-      "trimStart": null,
-      "trimEnd": null,
-      "volume": null,
-      "hotkey": null,
-      "position": 0,
-      "updatedAt": "2026-10-02T18:00:00.000Z",
-      "deletedAt": null
-    }
-  ]
+  "version": "0.1.0",
+  "schemaVersion": 1,
+  "revision": 9,
+  "updatedAt": "2026-10-02T19:45:01.456Z",
+  "hashAlgorithm": "sha256",
+  "groups": [],
+  "clips": []
 }
 ```
 
-### `GET /api/sync?since=<ISO-8601>`
+Group: `id`, `name`, `sortOrder`, `createdAt`, `updatedAt`, `revision`.
 
-Optional incremental read for other clients. Same body as `/api/library`, but only rows whose `updatedAt` is strictly newer than `since`. Tombstones are included. The Windows app does not require this route.
+Clip: `id`, `name`, `groupId`, `durationMs`, `trimStartMs`, `trimEndMs`, `createdAt`, `updatedAt`, `audioPath`, `hash`, `mimeType`, `sizeBytes`, `revision`.
 
-### `GET /api/clips/:id/audio`
+### `GET /api/sync?sinceRevision=<integer>`
 
-Raw audio bytes. `Content-Type: application/octet-stream`. `X-Content-Hash` is the SHA-256 hex. Missing or tombstoned clips return 404.
+Changes with `revision` greater than the cursor. `since=` (ISO time) exists on the server and is not used by this app.
 
-### `PUT /api/clips/:id`
+```json
+{
+  "mode": "incremental",
+  "sinceRevision": 8,
+  "serverRevision": 9,
+  "hashAlgorithm": "sha256",
+  "groups": { "upserted": [], "deleted": [] },
+  "clips": {
+    "upserted": [],
+    "deleted": [{ "id": "...", "revision": 9, "deletedAt": "2026-10-02T19:45:01.456Z" }]
+  }
+}
+```
 
-Upsert clip metadata (the JSON object above, without audio). The server must not treat this as permission to read anything except the library.
+### Writes
 
-### `PUT /api/clips/:id/audio`
+| Call | Body | Success |
+| --- | --- | --- |
+| `POST /api/groups` | `{ "id", "name", "sortOrder" }` | `201` group |
+| `PATCH /api/groups/:id` | `{ "name", "sortOrder" }` | `200` group |
+| `DELETE /api/groups/:id` | empty | `204`, or `409` if the group still has clips |
+| `POST /api/clips` | `multipart/form-data` with `file`, plus `id`, `name`, `groupId`, optional trim | `201` clip |
+| `PATCH /api/clips/:id` | `{ "name", "groupId", "trimStartMs", "trimEndMs" }` | `200` clip |
+| `PUT /api/clips/:id/audio` | `multipart/form-data` with `file` | `200` clip. Replacing audio resets trim on the server; a trim patch follows when this PC still has trim. |
+| `DELETE /api/clips/:id` | empty | `204` |
 
-Raw bytes. Header `X-Content-Hash` must match the body when present. Response: `{ "contentHash": "<sha256 hex>" }`.
+`GET /api/clips/:id/audio` returns the stored bytes. `ETag` is the quoted SHA-256. The client checks the body hash against `hash`.
 
-### `DELETE /api/clips/:id`
+Allowed audio is detected from magic bytes (MP3, WAV, Ogg, WebM, M4A, FLAC, AAC), up to 32 MiB.
 
-Writes a tombstone. Response includes the tombstoned clip (`deletedAt`, `updatedAt`). Does not mean "forget the id".
+## Try the stub
 
-### `PUT /api/groups/:id` and `DELETE /api/groups/:id`
-
-Same pattern as clips. Delete tombstones the group. The Windows app also ungroups that group's clips locally, matching the existing "delete group, sounds become ungrouped" behavior, and pushes those clip edits.
-
-### `PUT /api/library`
-
-Optional bulk upsert. Body: `{ "groups": [...], "clips": [...] }`. Each row is merged with the same last-write-wins rule. This is **not** a replace-all: omitted rows stay. Response: `{ "revisedAt": "..." }`. The Windows client pushes granular PUT/DELETE calls rather than this bulk route.
-
-## Try it with the stub
-
-The stub keeps the library in memory and speaks this contract. It is not the lab service.
+The stub speaks this contract in memory. It is not the process on port 4092.
 
 ```bash
 node scripts/home-server-stub.js --port 8787 --token lab-secret
-```
-
-In the app: enable Home Server, set the base URL to `http://127.0.0.1:8787`, set the token to `lab-secret`, then **Sync now**.
-
-Stop the stub and sync again. Status becomes **Offline**. Clips already on disk still play.
-
-Checks that do not need the Electron UI:
-
-```bash
 npm run test:home-server
 ```
 
-That covers the merge rule, a pull that writes audio into a local library, a push of an offline edit, a refused Discord token, and an unreachable server that leaves the local rows unchanged.
+Point the app at `http://127.0.0.1:8787` with token `lab-secret` to exercise sync without the lab. Stop the stub and sync again: status becomes **Offline**, and clips already on disk still play.
+
+Against the live service, use `http://192.168.0.211:4092` and the lab API key.
 
 ## What is not in this change
 
-- No phone PWA and no deploy of `mithium/mithium-sound-library`. This pull request is the Windows client plus a local stub. The planned binds are listed above.
+- No phone PWA deploy. The PWA uses the Tailscale URL above.
 - No release bump and no git tag.
 - LAN Web Remote is unchanged.

@@ -258,8 +258,8 @@
         <div id="home-server-config" class="hidden" style="margin-top: 16px;">
           <div class="form-group">
             <label for="setting-home-server-url">Base URL</label>
-            <input type="text" id="setting-home-server-url" placeholder="http://homelab:8787" autocomplete="off" spellcheck="false">
-            <p style="margin-top: 6px; font-size: 12px; color: var(--text-muted);">LAN address of the home-lab server, for example <code>http://192.168.1.20:8787</code>.</p>
+            <input type="text" id="setting-home-server-url" placeholder="http://192.168.0.211:4092" autocomplete="off" spellcheck="false">
+            <p style="margin-top: 6px; font-size: 12px; color: var(--text-muted);">LAN address of the library service: <code>http://192.168.0.211:4092</code>.</p>
           </div>
           <div class="form-group">
             <label for="setting-home-server-token">Auth token</label>
@@ -272,7 +272,7 @@
             <button id="home-server-sync-btn" type="button">Sync now</button>
           </div>
           <p style="margin: 8px 0; font-size: 12px; color: var(--text-secondary); line-height: 1.6;">
-            <strong>Sync rule:</strong> newest <code>updatedAt</code> wins. If the timestamps tie, the greater audio hash wins. Clips that exist only on this PC are kept and uploaded. A clip is removed only when the server has a newer delete tombstone — a missing row is not treated as a delete.
+            <strong>Sync rule:</strong> the server's revision wins. Offline edits upload on the next sync. Clips that exist only on this PC are kept. Deletes come from the sync feed, not from a row missing in the full library.
           </p>
         </div>
       </details>

@@ -67,12 +67,21 @@ function migrateSyncColumns() {
   addColumn('sounds', 'synced', 'synced INTEGER NOT NULL DEFAULT 0');
   addColumn('sounds', 'hotkey', 'hotkey TEXT');
   addColumn('sounds', 'clip_volume', 'clip_volume REAL');
+  addColumn('sounds', 'trim_start_ms', 'trim_start_ms INTEGER');
+  addColumn('sounds', 'trim_end_ms', 'trim_end_ms INTEGER');
+  addColumn('sounds', 'duration_ms', 'duration_ms INTEGER');
+  addColumn('sounds', 'mime_type', 'mime_type TEXT');
+  addColumn('sounds', 'size_bytes', 'size_bytes INTEGER');
+  addColumn('sounds', 'audio_path', 'audio_path TEXT');
+  addColumn('sounds', 'remote_hash', 'remote_hash TEXT');
+  addColumn('sounds', 'server_revision', 'server_revision INTEGER');
 
   addColumn('groups', 'sync_id', 'sync_id TEXT');
   addColumn('groups', 'updated_at', 'updated_at TEXT');
   addColumn('groups', 'deleted_at', 'deleted_at TEXT');
   addColumn('groups', 'dirty', 'dirty INTEGER NOT NULL DEFAULT 1');
   addColumn('groups', 'synced', 'synced INTEGER NOT NULL DEFAULT 0');
+  addColumn('groups', 'server_revision', 'server_revision INTEGER');
 
   const sounds = queryAll('SELECT id, sync_id, created_at, updated_at FROM sounds');
   for (const row of sounds) {
@@ -472,14 +481,15 @@ function rowToClip(row, byLocal) {
     groupId: row.group_id ? (byLocal.get(row.group_id) || null) : null,
     name: row.name,
     filename: row.filename,
-    contentHash: row.content_hash || null,
-    sourceType: row.source_type || 'local',
-    youtubeUrl: row.youtube_url || null,
-    trimStart: row.youtube_start || null,
-    trimEnd: row.youtube_end || null,
-    volume: row.clip_volume == null ? null : row.clip_volume,
-    hotkey: row.hotkey || null,
-    position: row.position || 0,
+    hash: row.content_hash || null,
+    remoteHash: row.remote_hash || null,
+    trimStartMs: row.trim_start_ms == null ? null : Number(row.trim_start_ms),
+    trimEndMs: row.trim_end_ms == null ? null : Number(row.trim_end_ms),
+    durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
+    mimeType: row.mime_type || null,
+    sizeBytes: row.size_bytes == null ? null : Number(row.size_bytes),
+    audioPath: row.audio_path || null,
+    revision: row.server_revision == null ? null : Number(row.server_revision),
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at || null,
     dirty: !!row.dirty,
@@ -491,7 +501,8 @@ function rowToGroup(row) {
   return {
     id: row.sync_id,
     name: row.name,
-    position: row.position || 0,
+    sortOrder: Number(row.position) || 0,
+    revision: row.server_revision == null ? null : Number(row.server_revision),
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at || null,
     dirty: !!row.dirty,
@@ -525,48 +536,44 @@ function safeSoundPath(filename) {
 }
 
 function safeSyncFilename(clip) {
-  const ext = path.extname(String(clip.filename || '')).toLowerCase();
+  const fromPath = path.extname(String(clip.audioPath || clip.filename || '')).toLowerCase();
   const allowed = ['.mp3', '.wav', '.ogg', '.flac', '.webm', '.m4a', '.aac'];
-  const useExt = allowed.includes(ext) ? ext : '.mp3';
+  const useExt = allowed.includes(fromPath) ? fromPath : '.wav';
   const raw = String(clip.id || '');
-  const safe = /^[A-Za-z0-9_-]{1,128}$/.test(raw)
+  const safe = /^[a-z0-9-]{1,80}$/.test(raw)
     ? raw
     : crypto.createHash('sha256').update(raw).digest('hex');
   return `sync-${safe}${useExt}`;
 }
 
-function applySyncedGroup(group) {
+function keepLocalEdit(existing, record, baseUpdatedAt) {
+  if (!existing || !existing.dirty) return false;
+  if (baseUpdatedAt && existing.updated_at !== baseUpdatedAt) return true;
+  if (!baseUpdatedAt && Number(existing.server_revision || 0) >= Number(record.revision || 0)) return true;
+  return false;
+}
+
+function applySyncedGroup(group, baseUpdatedAt) {
   if (!group || !group.id) return;
   const existing = queryOne('SELECT * FROM groups WHERE sync_id = ?', [group.id]);
-  if (existing && Date.parse(existing.updated_at) > Date.parse(group.updatedAt)) return;
+  if (keepLocalEdit(existing, group, baseUpdatedAt)) return;
+  const sortOrder = Number.isFinite(Number(group.sortOrder))
+    ? Number(group.sortOrder)
+    : Number(group.position) || 0;
+  const updatedAt = group.updatedAt || (existing && existing.updated_at) || nowIso();
+  const revision = group.revision == null ? null : Number(group.revision);
   if (!existing) {
-    const posStmt = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM groups');
-    posStmt.step();
-    const fallback = posStmt.getAsObject().next;
-    posStmt.free();
     db.run(
-      `INSERT INTO groups (name, position, collapsed, sync_id, updated_at, deleted_at, dirty, synced)
-       VALUES (?, ?, 1, ?, ?, ?, 0, 1)`,
-      [
-        group.name || 'Group',
-        Number.isFinite(Number(group.position)) ? Number(group.position) : fallback,
-        group.id,
-        group.updatedAt,
-        group.deletedAt || null,
-      ]
+      `INSERT INTO groups (name, position, collapsed, sync_id, updated_at, deleted_at, dirty, synced, server_revision)
+       VALUES (?, ?, 1, ?, ?, ?, 0, 1, ?)`,
+      [group.name || 'Group', sortOrder, group.id, updatedAt, group.deletedAt || null, revision]
     );
   } else {
     db.run(
       `UPDATE groups
-       SET name = ?, position = ?, updated_at = ?, deleted_at = ?, dirty = 0, synced = 1
+       SET name = ?, position = ?, updated_at = ?, deleted_at = ?, dirty = 0, synced = 1, server_revision = ?
        WHERE sync_id = ?`,
-      [
-        group.name || existing.name,
-        Number(group.position) || 0,
-        group.updatedAt,
-        group.deletedAt || null,
-        group.id,
-      ]
+      [group.name || existing.name, sortOrder, updatedAt, group.deletedAt || null, revision, group.id]
     );
     if (group.deletedAt) {
       db.run('UPDATE sounds SET group_id = NULL WHERE group_id = ?', [existing.id]);
@@ -575,63 +582,78 @@ function applySyncedGroup(group) {
   persist();
 }
 
-function applySyncedClip(clip) {
+function fileHashIfPresent(filename) {
+  const filePath = safeSoundPath(filename);
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  return hashBuffer(fs.readFileSync(filePath));
+}
+
+function applySyncedClip(clip, baseUpdatedAt) {
   if (!clip || !clip.id) return;
   const existing = queryOne('SELECT * FROM sounds WHERE sync_id = ?', [clip.id]);
-  if (existing && Date.parse(existing.updated_at) > Date.parse(clip.updatedAt)) return;
+  if (keepLocalEdit(existing, clip, baseUpdatedAt)) return;
   const groupLocalId = clip.groupId
     ? (queryOne('SELECT id FROM groups WHERE sync_id = ?', [clip.groupId]) || {}).id || null
     : null;
+  const updatedAt = clip.updatedAt || (existing && existing.updated_at) || nowIso();
+  const revision = clip.revision == null ? null : Number(clip.revision);
+  const remoteHash = clip.hash || null;
+  let contentHash = null;
+  if (!clip.deletedAt && remoteHash) {
+    const onDisk = existing ? fileHashIfPresent(existing.filename) : null;
+    contentHash = onDisk === remoteHash ? remoteHash : null;
+  }
   if (!existing) {
+    const posStmt = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM sounds');
+    posStmt.step();
+    const nextPos = posStmt.getAsObject().next;
+    posStmt.free();
     db.run(
       `INSERT INTO sounds (
-         name, filename, source_type, youtube_url, youtube_start, youtube_end, position, group_id,
-         sync_id, updated_at, content_hash, deleted_at, dirty, synced, hotkey, clip_volume
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`,
+         name, filename, source_type, position, group_id, sync_id, updated_at, content_hash,
+         deleted_at, dirty, synced, trim_start_ms, trim_end_ms, duration_ms, mime_type,
+         size_bytes, audio_path, remote_hash, server_revision
+       ) VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         clip.name || 'Clip',
         safeSyncFilename(clip),
-        clip.sourceType || 'local',
-        clip.youtubeUrl || null,
-        clip.trimStart || null,
-        clip.trimEnd || null,
-        Number(clip.position) || 0,
+        nextPos,
         groupLocalId,
         clip.id,
-        clip.updatedAt,
-        null,
+        updatedAt,
+        contentHash,
         clip.deletedAt || null,
-        clip.hotkey || null,
-        clip.volume == null ? null : clip.volume,
+        clip.trimStartMs == null ? null : Number(clip.trimStartMs),
+        clip.trimEndMs == null ? null : Number(clip.trimEndMs),
+        clip.durationMs == null ? null : Number(clip.durationMs),
+        clip.mimeType || null,
+        clip.sizeBytes == null ? null : Number(clip.sizeBytes),
+        clip.audioPath || null,
+        remoteHash,
+        revision,
       ]
     );
   } else {
-    // Clear the stored hash when remote bytes differ so a failed download cannot
-    // win a timestamp tie and push the old file back. writeAudio sets the hash
-    // after the bytes are verified.
-    let nextHash = existing.content_hash || null;
-    if (!clip.deletedAt && clip.contentHash && nextHash !== clip.contentHash) {
-      nextHash = null;
-    }
     db.run(
       `UPDATE sounds
-       SET name = ?, source_type = ?, youtube_url = ?, youtube_start = ?, youtube_end = ?,
-           position = ?, group_id = ?, updated_at = ?, content_hash = ?, deleted_at = ?,
-           dirty = 0, synced = 1, hotkey = ?, clip_volume = ?
+       SET name = ?, group_id = ?, updated_at = ?, content_hash = ?, deleted_at = ?,
+           dirty = 0, synced = 1, trim_start_ms = ?, trim_end_ms = ?, duration_ms = ?,
+           mime_type = ?, size_bytes = ?, audio_path = ?, remote_hash = ?, server_revision = ?
        WHERE sync_id = ?`,
       [
         clip.name || existing.name,
-        clip.sourceType || existing.source_type || 'local',
-        clip.youtubeUrl || null,
-        clip.trimStart || null,
-        clip.trimEnd || null,
-        Number(clip.position) || 0,
-        groupLocalId,
-        clip.updatedAt,
-        nextHash,
+        clip.deletedAt ? existing.group_id : groupLocalId,
+        updatedAt,
+        clip.deletedAt ? existing.content_hash : contentHash,
         clip.deletedAt || null,
-        clip.hotkey || null,
-        clip.volume == null ? null : clip.volume,
+        clip.trimStartMs == null ? null : Number(clip.trimStartMs),
+        clip.trimEndMs == null ? null : Number(clip.trimEndMs),
+        clip.durationMs == null ? null : Number(clip.durationMs),
+        clip.mimeType || null,
+        clip.sizeBytes == null ? null : Number(clip.sizeBytes),
+        clip.audioPath || existing.audio_path || null,
+        remoteHash,
+        revision,
         clip.id,
       ]
     );
@@ -678,12 +700,12 @@ function discardAudioBySyncId(syncId) {
   if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
 }
 
-function markSyncAcknowledged(kind, syncId, updatedAt) {
+function markSyncAcknowledged(kind, syncId, baseUpdatedAt) {
   const table = kind === 'group' ? 'groups' : 'sounds';
-  if (updatedAt) {
+  if (baseUpdatedAt) {
     db.run(
       `UPDATE ${table} SET dirty = 0, synced = 1 WHERE sync_id = ? AND updated_at = ?`,
-      [syncId, updatedAt]
+      [syncId, baseUpdatedAt]
     );
   } else {
     db.run(`UPDATE ${table} SET dirty = 0, synced = 1 WHERE sync_id = ?`, [syncId]);

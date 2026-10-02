@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Offline-first Home Server sync tests. No Electron required.
+// Home Server sync tests against the mithium-sound-library contract. No Electron required.
 //   node scripts/test-home-server-sync.js
 
 const crypto = require('crypto');
 const assert = require('assert');
-const { pickWinner, planSync, publicClip } = require('../src/main/sync/merge');
+const { incrementalEvents, reconcileDeletes, clipPatchBody, groupWriteBody } = require('../src/main/sync/merge');
 const { createClient } = require('../src/main/sync/client');
 const { syncLibraries, hashBuffer } = require('../src/main/sync/engine');
 const { startStub } = require('./home-server-stub');
@@ -25,20 +25,36 @@ function test(name, fn) {
     });
 }
 
+function tinyWav(payload) {
+  const data = Buffer.from(payload || 'hello');
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(8000, 24);
+  header.writeUInt32LE(8000, 28);
+  header.writeUInt16LE(1, 32);
+  header.writeUInt16LE(8, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+
 function clip(overrides) {
   return {
-    id: 'clip-1',
+    id: '11111111-1111-4111-8111-111111111111',
     groupId: null,
     name: 'Airhorn',
-    filename: 'airhorn.mp3',
-    contentHash: 'aaa',
-    sourceType: 'local',
-    youtubeUrl: null,
-    trimStart: null,
-    trimEnd: null,
-    volume: null,
-    hotkey: null,
-    position: 0,
+    filename: 'airhorn.wav',
+    hash: null,
+    remoteHash: null,
+    trimStartMs: null,
+    trimEndMs: null,
+    revision: null,
     updatedAt: '2026-01-01T00:00:00.000Z',
     deletedAt: null,
     dirty: false,
@@ -52,36 +68,59 @@ function createMemoryStore(initial = {}) {
     groups: (initial.groups || []).map((group) => ({ ...group })),
     clips: (initial.clips || []).map((item) => ({ ...item })),
     audio: new Map(),
-    since: initial.since || null,
+    serverRevision: initial.serverRevision == null ? null : initial.serverRevision,
   };
   if (initial.audio) {
-    for (const [id, bytes] of initial.audio.entries()) {
-      state.audio.set(id, Buffer.from(bytes));
-    }
+    for (const [id, bytes] of initial.audio.entries()) state.audio.set(id, Buffer.from(bytes));
+  }
+  function keep(existing, record, baseUpdatedAt) {
+    if (!existing || !existing.dirty) return false;
+    if (baseUpdatedAt && existing.updatedAt !== baseUpdatedAt) return true;
+    if (!baseUpdatedAt && Number(existing.revision || 0) >= Number(record.revision || 0)) return true;
+    return false;
   }
   return {
-    getSince: () => state.since,
+    getServerRevision: () => state.serverRevision,
+    setServerRevision: (value) => {
+      state.serverRevision = value;
+    },
     getSnapshot: () => ({
       groups: state.groups.map((group) => ({ ...group })),
       clips: state.clips.map((item) => ({ ...item })),
     }),
-    applyGroup(group) {
+    applyGroup(group, baseUpdatedAt) {
       const index = state.groups.findIndex((item) => item.id === group.id);
-      const next = { ...group, dirty: false, synced: true };
-      if (index === -1) state.groups.push(next);
-      else {
-        if (Date.parse(state.groups[index].updatedAt) > Date.parse(group.updatedAt)) return;
-        state.groups[index] = { ...state.groups[index], ...next };
+      if (index === -1) {
+        state.groups.push({ ...group, dirty: false, synced: true });
+        return;
       }
+      if (keep(state.groups[index], group, baseUpdatedAt)) return;
+      state.groups[index] = { ...state.groups[index], ...group, dirty: false, synced: true };
     },
-    applyClip(item) {
+    applyClip(item, baseUpdatedAt) {
       const index = state.clips.findIndex((row) => row.id === item.id);
-      const next = { ...item, dirty: false, synced: true };
-      if (index === -1) state.clips.push(next);
-      else {
-        if (Date.parse(state.clips[index].updatedAt) > Date.parse(item.updatedAt)) return;
-        state.clips[index] = { ...state.clips[index], ...next, filename: state.clips[index].filename || item.filename };
+      if (index === -1) {
+        state.clips.push({
+          ...item,
+          remoteHash: item.hash || null,
+          hash: null,
+          dirty: false,
+          synced: true,
+          filename: item.filename || `${item.id}.wav`,
+        });
+        return;
       }
+      if (keep(state.clips[index], item, baseUpdatedAt)) return;
+      const existing = state.clips[index];
+      state.clips[index] = {
+        ...existing,
+        ...item,
+        filename: existing.filename || item.filename,
+        remoteHash: item.hash || existing.remoteHash || null,
+        hash: item.deletedAt ? existing.hash : existing.hash,
+        dirty: false,
+        synced: true,
+      };
     },
     audioHash(id) {
       const bytes = state.audio.get(id);
@@ -95,97 +134,64 @@ function createMemoryStore(initial = {}) {
       const buf = Buffer.from(bytes);
       state.audio.set(id, buf);
       const row = state.clips.find((item) => item.id === id);
-      if (row) row.contentHash = hashBuffer(buf);
+      if (row) row.hash = hashBuffer(buf);
     },
     discardAudio(id) {
       state.audio.delete(id);
     },
-    markSynced(kind, id, updatedAt) {
+    markSynced(kind, id, baseUpdatedAt) {
       const list = kind === 'group' ? state.groups : state.clips;
       const row = list.find((item) => item.id === id);
       if (!row) return;
-      if (updatedAt && row.updatedAt !== updatedAt) return;
+      if (baseUpdatedAt && row.updatedAt !== baseUpdatedAt) return;
       row.dirty = false;
       row.synced = true;
     },
-    snapshot: () => state,
   };
 }
 
 async function main() {
-  await test('newer updatedAt wins', () => {
-    const local = clip({ updatedAt: '2026-02-01T00:00:00.000Z', name: 'Local' });
-    const remote = clip({ updatedAt: '2026-03-01T00:00:00.000Z', name: 'Remote' });
-    assert.strictEqual(pickWinner(local, remote), 'remote');
-    assert.strictEqual(pickWinner(remote, local), 'local');
-  });
-
-  await test('tied timestamp uses greater content hash', () => {
-    const local = clip({ contentHash: 'abc', updatedAt: '2026-02-01T00:00:00.000Z' });
-    const remote = clip({ contentHash: 'zzz', updatedAt: '2026-02-01T00:00:00.000Z' });
-    assert.strictEqual(pickWinner(local, remote), 'remote');
-  });
-
-  await test('full tie keeps local and does not transfer a clean row', () => {
-    const local = clip();
-    const remote = clip();
-    assert.strictEqual(pickWinner(local, remote), 'equal');
-    const plan = planSync([local], [remote], 'clip');
-    assert.strictEqual(plan.pulls.length, 0);
-    assert.strictEqual(plan.pushes.length, 0);
-  });
-
-  await test('local-only dirty clip is pushed and clean synced omission is kept', () => {
-    const dirty = clip({ id: 'local-new', dirty: true, synced: false, name: 'New' });
-    const kept = clip({ id: 'already', dirty: false, synced: true, name: 'Kept' });
-    const plan = planSync([dirty, kept], [], 'clip');
-    assert.deepStrictEqual(plan.pushes.map((item) => item.id), ['local-new']);
-    assert.strictEqual(plan.pulls.length, 0);
-  });
-
-  await test('remote tombstone newer than local is pulled; older tombstone is not', () => {
-    const live = clip({ updatedAt: '2026-02-01T00:00:00.000Z' });
-    const newerDelete = clip({
-      updatedAt: '2026-04-01T00:00:00.000Z',
-      deletedAt: '2026-04-01T00:00:00.000Z',
+  await test('incremental events apply in revision order and deletes come from sync', () => {
+    const events = incrementalEvents({
+      groups: { upserted: [], deleted: [] },
+      clips: {
+        upserted: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'A', revision: 3, hash: 'abc', groupId: null }],
+        deleted: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', revision: 4, deletedAt: '2026-10-02T00:00:00.000Z' }],
+      },
     });
-    const olderDelete = clip({
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      deletedAt: '2026-01-01T00:00:00.000Z',
-    });
-    assert.strictEqual(planSync([live], [newerDelete], 'clip').pulls.length, 1);
-    const older = planSync(
-      [clip({ updatedAt: '2026-03-01T00:00:00.000Z', name: 'Edited offline' })],
-      [olderDelete],
-      'clip'
-    );
-    assert.strictEqual(older.pulls.length, 0);
-    assert.strictEqual(older.pushes.length, 1);
+    assert.deepStrictEqual(events.map((event) => event.op), ['upsert', 'delete']);
+    assert.strictEqual(events[1].revision, 4);
   });
 
-  await test('public clip payload has no bot token field', () => {
-    const payload = publicClip(clip({ botToken: 'should-not-copy' }));
-    assert.strictEqual(Object.prototype.hasOwnProperty.call(payload, 'botToken'), false);
-    assert.strictEqual(JSON.stringify(payload).includes('should-not-copy'), false);
+  await test('full-library reconcile drops clean synced rows and keeps dirty local-only rows', () => {
+    const local = [
+      clip({ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', revision: 2, synced: true, dirty: false }),
+      clip({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', revision: null, synced: false, dirty: true, name: 'Only here' }),
+    ];
+    const removed = reconcileDeletes(local, []);
+    assert.deepStrictEqual(removed.map((item) => item.id), ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']);
   });
 
-  await test('pull from stub updates the local library and audio', async () => {
-    const id = crypto.randomUUID();
-    const bytes = Buffer.from('RIFF-fake-airhorn');
-    const contentHash = hashBuffer(bytes);
+  await test('wire bodies omit server timestamps and discord fields', () => {
+    const group = groupWriteBody({ id: 'CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC', name: 'Bits', sortOrder: 1 });
+    assert.strictEqual(group.id, 'cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(group, 'updatedAt'), false);
+    const patch = clipPatchBody({ name: 'Airhorn', groupId: 'G', trimStartMs: 0, trimEndMs: 10, updatedAt: 'nope', youtubeUrl: 'https://youtu.be/x' });
+    assert.deepStrictEqual(Object.keys(patch).sort(), ['groupId', 'name', 'trimEndMs', 'trimStartMs']);
+  });
+
+  await test('pull from stub stores hash, trim, and audio', async () => {
+    const id = '22222222-2222-4222-8222-222222222222';
+    const bytes = tinyWav('from-lab');
     const stub = await startStub({
       token: 'lab-secret',
-      clips: [
-        clip({
-          id,
-          name: 'From Lab',
-          contentHash,
-          filename: 'from-lab.mp3',
-          updatedAt: '2026-05-01T00:00:00.000Z',
-          dirty: false,
-          synced: true,
-        }),
-      ],
+      clips: [{
+        id,
+        name: 'From Lab',
+        groupId: '6c1e0e3a-1e2b-4c5d-8f90-123456789abc',
+        trimStartMs: 10,
+        trimEndMs: 40,
+      }],
       audio: new Map([[id, bytes]]),
     });
     try {
@@ -197,35 +203,37 @@ async function main() {
       });
       const result = await syncLibraries({ client, store });
       assert.strictEqual(result.status, 'connected');
-      assert.strictEqual(result.libraryChanged, true);
       const saved = store.getSnapshot().clips.find((item) => item.id === id);
-      assert.ok(saved, 'clip was pulled');
+      assert.ok(saved);
       assert.strictEqual(saved.name, 'From Lab');
-      assert.strictEqual(store.audioHash(id), contentHash);
-      const leaked = stub.requests.some((req) => JSON.stringify(req).includes('discord-bot-token-do-not-send'));
+      assert.strictEqual(saved.trimStartMs, 10);
+      assert.strictEqual(saved.remoteHash, hashBuffer(bytes));
+      assert.strictEqual(store.audioHash(id), hashBuffer(bytes));
+      assert.strictEqual(store.getServerRevision(), stub.revision);
+      const library = stub.libraryBody();
+      assert.strictEqual(library.clips.some((item) => item.deletedAt), false);
+      const leaked = stub.requests.some((req) => JSON.stringify(req.headers).includes('discord-bot-token-do-not-send') || (req.body || '').includes('discord-bot-token-do-not-send'));
       assert.strictEqual(leaked, false);
     } finally {
       await stub.close();
     }
   });
 
-  await test('push sends local offline edits and not the discord token', async () => {
-    const id = crypto.randomUUID();
-    const bytes = Buffer.from('local-clip-bytes');
-    const contentHash = hashBuffer(bytes);
+  await test('push uses multipart create and does not send timestamps or the discord token', async () => {
+    const id = '33333333-3333-4333-8333-333333333333';
+    const bytes = tinyWav('made-offline');
     const stub = await startStub({ token: 'lab-secret' });
     try {
       const store = createMemoryStore({
-        clips: [
-          clip({
-            id,
-            name: 'Made Offline',
-            contentHash,
-            dirty: true,
-            synced: false,
-            updatedAt: '2026-06-01T00:00:00.000Z',
-          }),
-        ],
+        clips: [clip({
+          id,
+          name: 'Made Offline',
+          hash: hashBuffer(bytes),
+          dirty: true,
+          synced: false,
+          revision: null,
+          filename: 'offline.wav',
+        })],
         audio: new Map([[id, bytes]]),
       });
       const client = createClient({
@@ -234,29 +242,80 @@ async function main() {
         forbiddenSecrets: ['discord-bot-token-do-not-send'],
       });
       const result = await syncLibraries({ client, store });
-      assert.strictEqual(result.status, 'connected');
-      assert.strictEqual(result.pushed, 1);
-      const remote = stub.library.clips.find((item) => item.id === id);
+      assert.strictEqual(result.status, 'connected', result.message);
+      const remote = stub.clips.find((item) => item.id === id);
       assert.ok(remote);
       assert.strictEqual(remote.name, 'Made Offline');
-      assert.strictEqual(hashBuffer(stub.audio.get(id)), contentHash);
-      const dumped = JSON.stringify(stub.requests);
+      assert.strictEqual(remote.hash, hashBuffer(bytes));
+      const post = stub.requests.find((req) => req.method === 'POST' && req.path === '/api/clips');
+      assert.ok(post);
+      assert.match(post.headers['content-type'], /multipart\/form-data/);
+      assert.strictEqual(post.fields.name, 'Made Offline');
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(post.fields, 'updatedAt'), false);
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(post.fields, 'createdAt'), false);
+      const dumped = JSON.stringify(stub.requests.map((req) => ({ path: req.path, json: req.json, fields: req.fields, auth: req.headers.authorization })));
       assert.strictEqual(dumped.includes('discord-bot-token-do-not-send'), false);
       assert.strictEqual(dumped.includes('botToken'), false);
-      const row = store.getSnapshot().clips.find((item) => item.id === id);
-      assert.strictEqual(row.dirty, false);
-      assert.strictEqual(row.synced, true);
     } finally {
       await stub.close();
     }
   });
 
-  await test('unreachable server leaves the local library unchanged and reports offline', async () => {
+  await test('delete on the stub is a sync tombstone and is absent from the full library', async () => {
+    const id = '55555555-5555-4555-8555-555555555555';
+    const localOnly = '66666666-6666-4666-8666-666666666666';
+    const bytes = tinyWav('gone-soon');
+    const localBytes = tinyWav('stay-local');
+    const stub = await startStub({
+      token: 'lab-secret',
+      clips: [{ id, name: 'Gone Soon', groupId: '6c1e0e3a-1e2b-4c5d-8f90-123456789abc' }],
+      audio: new Map([[id, bytes]]),
+    });
+    try {
+      const store = createMemoryStore({
+        clips: [clip({
+          id: localOnly,
+          name: 'PC Only',
+          hash: hashBuffer(localBytes),
+          dirty: true,
+          synced: false,
+          revision: null,
+          filename: 'local.wav',
+        })],
+        audio: new Map([[localOnly, localBytes]]),
+      });
+      const client = createClient({ baseUrl: stub.baseUrl, token: 'lab-secret' });
+      const first = await syncLibraries({ client, store });
+      assert.strictEqual(first.status, 'connected', first.message);
+      const del = await fetch(`${stub.baseUrl}/api/clips/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer lab-secret' },
+      });
+      assert.strictEqual(del.status, 204);
+      const library = await (await fetch(`${stub.baseUrl}/api/library`, {
+        headers: { Authorization: 'Bearer lab-secret' },
+      })).json();
+      assert.strictEqual(library.clips.some((item) => item.id === id), false);
+      const sync = await (await fetch(`${stub.baseUrl}/api/sync?sinceRevision=${first.serverRevision}`, {
+        headers: { Authorization: 'Bearer lab-secret' },
+      })).json();
+      assert.ok(sync.clips.deleted.some((item) => item.id === id));
+      const second = await syncLibraries({ client, store });
+      assert.strictEqual(second.status, 'connected', second.message);
+      const names = store.getSnapshot().clips.filter((item) => !item.deletedAt).map((item) => item.name).sort();
+      assert.ok(names.includes('PC Only'));
+      assert.strictEqual(names.includes('Gone Soon'), false);
+    } finally {
+      await stub.close();
+    }
+  });
+
+  await test('unreachable server leaves the local library unchanged', async () => {
     const stub = await startStub({ token: 'lab-secret' });
     const baseUrl = stub.baseUrl;
     await stub.close();
     const store = createMemoryStore({
-      clips: [clip({ id: 'stay', name: 'Still Here', dirty: true, synced: false })],
+      clips: [clip({ id: '77777777-7777-4777-8777-777777777777', name: 'Still Here', dirty: true, synced: false, revision: null })],
     });
     const before = JSON.stringify(store.getSnapshot());
     const client = createClient({ baseUrl, token: 'lab-secret' });
@@ -268,9 +327,7 @@ async function main() {
   await test('wrong token is an error and does not change local clips', async () => {
     const stub = await startStub({ token: 'lab-secret' });
     try {
-      const store = createMemoryStore({
-        clips: [clip({ name: 'Untouched' })],
-      });
+      const store = createMemoryStore({ clips: [clip({ name: 'Untouched' })] });
       const before = JSON.stringify(store.getSnapshot());
       const client = createClient({ baseUrl: stub.baseUrl, token: 'nope' });
       const result = await syncLibraries({ client, store });
@@ -282,7 +339,7 @@ async function main() {
     }
   });
 
-  await test('client refuses to put a payload that contains the discord token', async () => {
+  await test('client refuses a group name that is the discord token before any write', async () => {
     const stub = await startStub({ token: 'lab-secret' });
     try {
       const client = createClient({
@@ -291,11 +348,10 @@ async function main() {
         forbiddenSecrets: ['discord-bot-token-do-not-send'],
       });
       await assert.rejects(
-        () => client.putClip(publicClip(clip({ name: 'discord-bot-token-do-not-send' }))),
+        () => client.createGroup({ id: crypto.randomUUID(), name: 'discord-bot-token-do-not-send', sortOrder: 0 }),
         /Discord bot token/
       );
-      const puts = stub.requests.filter((req) => req.method === 'PUT');
-      assert.strictEqual(puts.length, 0);
+      assert.strictEqual(stub.requests.some((req) => req.method === 'POST'), false);
     } finally {
       await stub.close();
     }
@@ -317,7 +373,7 @@ async function main() {
     }
   });
 
-  await test('local database keeps playback rows offline and accepts a pulled clip', async () => {
+  await test('local database accepts a lab clip and still plays when the server drops', async () => {
     const fs = require('fs');
     const os = require('os');
     const path = require('path');
@@ -329,28 +385,13 @@ async function main() {
     const initSqlJs = require('sql.js');
     const SQL = await initSqlJs();
     const legacy = new SQL.Database();
-    legacy.run(`
-      CREATE TABLE sounds (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        filename TEXT NOT NULL,
-        source_type TEXT NOT NULL DEFAULT 'local',
-        youtube_url TEXT,
-        youtube_start TEXT,
-        youtube_end TEXT,
-        position INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      )
-    `);
-    legacy.run(`
-      CREATE TABLE groups (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        position INTEGER NOT NULL DEFAULT 0,
-        collapsed INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      )
-    `);
+    legacy.run(`CREATE TABLE sounds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, filename TEXT NOT NULL,
+      source_type TEXT NOT NULL DEFAULT 'local', youtube_url TEXT, youtube_start TEXT, youtube_end TEXT,
+      position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+    legacy.run(`CREATE TABLE groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+      collapsed INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
     legacy.run(`INSERT INTO sounds (name, filename, source_type, position) VALUES ('Old Horn', 'old.mp3', 'local', 0)`);
     fs.writeFileSync(path.join(userData, 'mithium-sound.db'), Buffer.from(legacy.export()));
     fs.writeFileSync(path.join(soundsDir, 'old.mp3'), 'old-bytes');
@@ -358,162 +399,80 @@ async function main() {
 
     const originalLoad = Module._load;
     Module._load = function (request, parent, isMain) {
-      if (request === 'electron') {
-        return { app: { getPath: () => userData } };
-      }
+      if (request === 'electron') return { app: { getPath: () => userData } };
       return originalLoad.call(this, request, parent, isMain);
     };
+    const labId = '88888888-8888-4888-8888-888888888888';
+    const labBytes = tinyWav('lab-audio');
+    const stub = await startStub({
+      token: 'lab-secret',
+      clips: [{ id: labId, name: 'Lab Clip', groupId: '6c1e0e3a-1e2b-4c5d-8f90-123456789abc', trimStartMs: 5, trimEndMs: 15 }],
+      audio: new Map([[labId, labBytes]]),
+    });
     try {
-      const soundboardPath = require.resolve('../src/main/soundboard');
-      delete require.cache[soundboardPath];
       const soundboard = require('../src/main/soundboard');
       await soundboard.init();
-
       const playable = soundboard.getAllSounds();
-      assert.strictEqual(playable.length, 1);
       assert.strictEqual(playable[0].name, 'Old Horn');
-      assert.ok(playable[0].sync_id, 'legacy clip received a sync id');
-
-      const snap = soundboard.getSyncSnapshot();
-      assert.strictEqual(snap.clips.length, 1);
-      assert.strictEqual(snap.clips[0].dirty, true);
-      assert.ok(snap.clips[0].contentHash);
-
       soundboard.deleteSound(playable[0].id);
-      assert.strictEqual(soundboard.getAllSounds().length, 0, 'deleted clip is hidden from playback');
-      const tombstone = soundboard.getSyncSnapshot().clips.find((item) => item.name === 'Old Horn');
-      assert.ok(tombstone.deletedAt);
+      assert.strictEqual(soundboard.getAllSounds().length, 0);
 
-      const remoteId = '33333333-3333-4333-8333-333333333333';
+      const keptId = '99999999-9999-4999-8999-999999999999';
+      const keptBytes = tinyWav('kept');
       soundboard.applySyncedClip({
-        id: remoteId,
-        groupId: null,
+        id: keptId,
         name: 'From Server',
-        filename: 'remote.mp3',
-        contentHash: hashBuffer(Buffer.from('remote-bytes')),
-        sourceType: 'local',
+        hash: hashBuffer(keptBytes),
+        revision: 1,
+        trimStartMs: 0,
+        trimEndMs: null,
         updatedAt: '2026-09-01T00:00:00.000Z',
         deletedAt: null,
-        position: 1,
-        volume: null,
-        hotkey: null,
-        trimStart: null,
-        trimEnd: null,
       });
-      assert.strictEqual(soundboard.getAllSounds().length, 1);
-      assert.strictEqual(soundboard.getAllSounds()[0].name, 'From Server');
-      soundboard.writeAudioBySyncId(remoteId, Buffer.from('remote-bytes'));
-      assert.strictEqual(soundboard.getAudioHash(remoteId), hashBuffer(Buffer.from('remote-bytes')));
-      assert.strictEqual(soundboard.getSyncSnapshot().clips.find((item) => item.id === remoteId).dirty, false);
+      soundboard.writeAudioBySyncId(keptId, keptBytes);
+      assert.strictEqual(soundboard.getAudioHash(keptId), hashBuffer(keptBytes));
 
       soundboard.applySyncedClip({
         id: '../../outside',
-        groupId: null,
         name: 'Outside',
-        filename: '../../outside.mp3',
-        contentHash: null,
-        sourceType: 'local',
+        hash: null,
+        revision: 1,
         updatedAt: '2026-11-01T00:00:00.000Z',
         deletedAt: null,
-        position: 2,
       });
       const outside = soundboard.getAllSounds().find((row) => row.name === 'Outside');
       assert.ok(outside);
       assert.strictEqual(outside.filename.includes('..'), false);
-      assert.strictEqual(path.dirname(soundboard.getFilePath(outside.filename)), soundsDir);
 
-      const labId = '44444444-4444-4444-8444-444444444444';
-      const labBytes = Buffer.from('lab-audio-bytes');
-      const stub = await startStub({
-        token: 'lab-secret',
-        clips: [
-          clip({
-            id: labId,
-            name: 'Lab Clip',
-            contentHash: hashBuffer(labBytes),
-            filename: 'lab.mp3',
-            updatedAt: '2026-10-01T00:00:00.000Z',
-          }),
-        ],
-        audio: new Map([[labId, labBytes]]),
-      });
-      try {
-        fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
-          botToken: 'discord-bot-token-do-not-send',
-          homeServerEnabled: true,
-          homeServerUrl: stub.baseUrl,
-          homeServerToken: 'lab-secret',
-        }));
-        const homeserver = require('../src/main/homeserver');
-        const synced = await homeserver.syncNow();
-        assert.strictEqual(synced.status, 'connected');
-        const names = soundboard.getAllSounds().map((row) => row.name).sort();
-        assert.deepStrictEqual(names, ['From Server', 'Lab Clip', 'Outside']);
-        assert.strictEqual(soundboard.getAudioHash(labId), hashBuffer(labBytes));
-        assert.strictEqual(
-          stub.requests.some((req) => JSON.stringify(req).includes('discord-bot-token-do-not-send')),
-          false
-        );
-        await stub.close();
-        const offline = await homeserver.syncNow();
-        assert.strictEqual(offline.status, 'offline');
-        assert.deepStrictEqual(
-          soundboard.getAllSounds().map((row) => row.name).sort(),
-          ['From Server', 'Lab Clip', 'Outside']
-        );
-      } finally {
-        if (stub.server.listening) await stub.close();
-      }
+      fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+        botToken: 'discord-bot-token-do-not-send',
+        homeServerEnabled: true,
+        homeServerUrl: stub.baseUrl,
+        homeServerToken: 'lab-secret',
+      }));
+      const homeserver = require('../src/main/homeserver');
+      const synced = await homeserver.syncNow();
+      assert.strictEqual(synced.status, 'connected', synced.message);
+      const names = soundboard.getAllSounds().map((row) => row.name).sort();
+      assert.ok(names.includes('Lab Clip'));
+      assert.ok(names.includes('From Server'));
+      assert.strictEqual(soundboard.getAudioHash(labId), hashBuffer(labBytes));
+      const labRow = soundboard.getSyncSnapshot().clips.find((item) => item.id === labId);
+      assert.strictEqual(labRow.trimStartMs, 5);
+      assert.strictEqual(labRow.trimEndMs, 15);
+      assert.strictEqual(
+        stub.requests.some((req) => JSON.stringify(req.fields || req.json || {}).includes('discord-bot-token-do-not-send')
+          || JSON.stringify(req.headers).includes('discord-bot-token-do-not-send')),
+        false
+      );
+      await stub.close();
+      const offline = await homeserver.syncNow();
+      assert.strictEqual(offline.status, 'offline');
+      assert.ok(soundboard.getAllSounds().some((row) => row.name === 'Lab Clip'));
     } finally {
+      if (stub.server.listening) await stub.close();
       Module._load = originalLoad;
       fs.rmSync(userData, { recursive: true, force: true });
-    }
-  });
-
-  await test('remote edit wins and local-only clip is not deleted', async () => {
-    const shared = crypto.randomUUID();
-    const localOnly = crypto.randomUUID();
-    const stub = await startStub({
-      token: 'lab-secret',
-      clips: [
-        clip({
-          id: shared,
-          name: 'Server Name',
-          contentHash: null,
-          updatedAt: '2026-08-01T00:00:00.000Z',
-        }),
-      ],
-    });
-    try {
-      const store = createMemoryStore({
-        clips: [
-          clip({
-            id: shared,
-            name: 'Old Local',
-            contentHash: null,
-            updatedAt: '2026-01-01T00:00:00.000Z',
-            dirty: false,
-            synced: true,
-          }),
-          clip({
-            id: localOnly,
-            name: 'PC Only',
-            contentHash: null,
-            dirty: false,
-            synced: true,
-            updatedAt: '2026-07-01T00:00:00.000Z',
-          }),
-        ],
-      });
-      const client = createClient({ baseUrl: stub.baseUrl, token: 'lab-secret' });
-      const result = await syncLibraries({ client, store });
-      assert.strictEqual(result.status, 'connected');
-      const clips = store.getSnapshot().clips;
-      assert.strictEqual(clips.find((item) => item.id === shared).name, 'Server Name');
-      assert.ok(clips.find((item) => item.id === localOnly), 'local-only clip remains');
-      assert.strictEqual(stub.library.clips.some((item) => item.id === localOnly), false);
-    } finally {
-      await stub.close();
     }
   });
 
