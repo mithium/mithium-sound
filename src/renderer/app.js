@@ -1153,6 +1153,16 @@ function formatBytes(bytes) {
       $('#token-login-btn').classList.add('hidden');
       $('#token-logout-btn').classList.remove('hidden');
       await loadGuilds();
+      
+      // If Output Mode is Local Device Only, ensure bot is not in a voice channel
+      const outputMode = settings.outputMode || 'discord';
+      if (outputMode === 'local') {
+        const isInChannel = await window.api.botIsInChannel();
+        if (isInChannel) {
+          console.log('Output Mode is Local Device Only - leaving voice channel');
+          await window.api.botLeaveChannel();
+        }
+      }
     } catch {
       botStatusText.textContent = 'Auto-login failed';
       botStatus.className = 'status-dot offline';
