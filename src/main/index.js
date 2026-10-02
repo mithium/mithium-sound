@@ -3,41 +3,42 @@ const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 
-// Setup FFmpeg for prism-media
+// Setup FFmpeg for prism-media / @discordjs/voice
 function setupFFmpeg() {
+  let ffmpegPath;
+  
+  if (app.isPackaged) {
+    // Production: use bundled ffmpeg.exe from extraResources
+    ffmpegPath = path.join(process.resourcesPath, 'ffmpeg', 'ffmpeg.exe');
+    console.log('Using bundled ffmpeg.exe:', ffmpegPath);
+  } else {
+    // Development: use ffmpeg-static
+    try {
+      ffmpegPath = require('ffmpeg-static');
+      console.log('Using ffmpeg-static in dev mode:', ffmpegPath);
+    } catch (err) {
+      console.error('ffmpeg-static not found in dev mode:', err.message);
+      return;
+    }
+  }
+  
+  // Verify ffmpeg exists
+  if (!fs.existsSync(ffmpegPath)) {
+    console.error('FFmpeg binary not found at:', ffmpegPath);
+    return;
+  }
+  
+  // Set FFMPEG_PATH environment variable for prism-media
+  process.env.FFMPEG_PATH = ffmpegPath;
+  console.log('Set FFMPEG_PATH:', process.env.FFMPEG_PATH);
+  
+  // Verify prism-media can find it
   try {
-    // Try to get ffmpeg-static path (bundled with app)
-    const ffmpegPath = require('ffmpeg-static');
-    console.log('ffmpeg-static found at:', ffmpegPath);
-    
-    // Force prism-media to find our bundled FFmpeg
     const prism = require('prism-media');
     const info = prism.FFmpeg.getInfo(true);
-    console.log('FFmpeg found by prism-media:', info.command);
+    console.log('prism-media FFmpeg:', info.command);
   } catch (err) {
-    console.error('FFmpeg setup failed:', err.message);
-    // Try monkey-patching as fallback
-    try {
-      const ffmpegPath = require('ffmpeg-static');
-      const prism = require('prism-media');
-      const cp = require('child_process');
-      const result = cp.spawnSync(ffmpegPath, ['-version'], { windowsHide: true });
-      if (!result.error) {
-        const origGetInfo = prism.FFmpeg.getInfo.bind(prism.FFmpeg);
-        prism.FFmpeg.getInfo = function(force) {
-          try { return origGetInfo(force); } catch {
-            return {
-              command: ffmpegPath,
-              output: Buffer.concat(result.output.filter(Boolean)).toString(),
-              get version() { return this.output.match(/version (\S+)/)?.[1] ?? 'unknown'; },
-            };
-          }
-        };
-        console.log('Patched prism-media to use ffmpeg-static:', ffmpegPath);
-      }
-    } catch (patchErr) {
-      console.error('FFmpeg monkey-patch also failed:', patchErr.message);
-    }
+    console.error('prism-media FFmpeg.getInfo() failed:', err.message);
   }
 }
 setupFFmpeg();
@@ -296,12 +297,15 @@ ipcMain.handle('youtube:extract', async (_e, opts) => {
   const filename = `${Date.now()}-yt-${name.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp3`;
   const outputPath = path.join(soundboard.getSoundsDir(), filename);
   
-  // Get FFmpeg path from ffmpeg-static
-  let ffmpegPath = null;
-  try {
-    ffmpegPath = require('ffmpeg-static');
-  } catch (err) {
-    console.error('ffmpeg-static not found for YouTube extraction:', err.message);
+  // Get FFmpeg path (same as setupFFmpeg logic)
+  let ffmpegPath = process.env.FFMPEG_PATH;
+  if (!ffmpegPath) {
+    console.warn('FFMPEG_PATH not set, falling back to ffmpeg-static');
+    try {
+      ffmpegPath = require('ffmpeg-static');
+    } catch (err) {
+      console.error('ffmpeg-static not found for YouTube extraction:', err.message);
+    }
   }
   
   const ytdlpPath = resolveYtdlpPath();

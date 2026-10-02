@@ -1,12 +1,12 @@
 {
   "name": "mithium-sound",
-  "version": "1.8.4",
+  "version": "1.8.5",
   "description": "Discord soundboard desktop app",
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
     "postinstall": "node scripts/patch-voice.js",
-    "build": "node scripts/patch-voice.js && electron-builder --win nsis zip"
+    "build": "node scripts/patch-voice.js && node scripts/copy-ffmpeg.js && electron-builder --win nsis zip"
   },
   "author": "Mithium",
   "license": "MIT",

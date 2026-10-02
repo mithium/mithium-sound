@@ -6,3 +6,4 @@ settings.json
 mithium-sound.db
 sounds/
 bin/win/*.exe
+build/ffmpeg/
