@@ -112,6 +112,9 @@ async function loadSettings() {
 }
 
 $('#settings-save-btn').addEventListener('click', async () => {
+  const oldSettings = await window.api.settingsGet();
+  const oldOutputMode = oldSettings.outputMode || 'discord';
+  
   const data = {
     botToken: $('#setting-token').value,
     ytdlpPath: $('#setting-ytdlp').value,
@@ -127,6 +130,15 @@ $('#settings-save-btn').addEventListener('click', async () => {
   if (!holdToPlayActive) {
     armedClipId = null;
   }
+  
+  // If output mode changed to "Local Device Only", leave Discord voice channel
+  if (oldOutputMode !== 'local' && data.outputMode === 'local') {
+    const isInChannel = await window.api.botIsInChannel();
+    if (isInChannel) {
+      await window.api.botLeaveChannel();
+    }
+  }
+  
   renderSoundGrid();
   const status = $('#settings-status');
   status.textContent = 'Settings saved!';
@@ -237,6 +249,15 @@ channelSelect.addEventListener('change', () => {
 joinBtn.addEventListener('click', async () => {
   const channelId = channelSelect.value;
   if (!channelId) return;
+  
+  // Check output mode before joining
+  const settings = await window.api.settingsGet();
+  const outputMode = settings.outputMode || 'discord';
+  if (outputMode === 'local') {
+    alert('Cannot join Discord voice channel in "Local Device Only" mode.\n\nChange Output Mode to "Discord Bot Only" or "Both" in Settings to enable Discord bot voice.');
+    return;
+  }
+  
   joinBtn.disabled = true;
   try {
     await window.api.botJoinChannel(channelId);

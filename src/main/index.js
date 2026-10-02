@@ -207,6 +207,10 @@ ipcMain.handle('bot:leaveChannel', () => {
   bot.leaveChannel();
 });
 
+ipcMain.handle('bot:isInChannel', () => {
+  return bot.isInChannel();
+});
+
 // --- Sound IPC ---
 ipcMain.handle('sound:getAll', () => soundboard.getAllSounds());
 

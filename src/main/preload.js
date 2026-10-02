@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('api', {
   botGetVoiceChannels: (guildId) => ipcRenderer.invoke('bot:getVoiceChannels', guildId),
   botJoinChannel: (channelId) => ipcRenderer.invoke('bot:joinChannel', channelId),
   botLeaveChannel: () => ipcRenderer.invoke('bot:leaveChannel'),
+  botIsInChannel: () => ipcRenderer.invoke('bot:isInChannel'),
 
   // Sounds
   soundGetAll: () => ipcRenderer.invoke('sound:getAll'),
