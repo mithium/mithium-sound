@@ -60,6 +60,7 @@ const soundboard = require('./soundboard');
 const youtube = require('./youtube');
 const settings = require('./settings');
 const remote = require('./remote');
+const homeserver = require('./homeserver');
 
 let mainWindow = null;
 
@@ -148,6 +149,10 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   mainWindow.webContents.openDevTools();
 
+  mainWindow.webContents.once('did-finish-load', () => {
+    homeserver.start();
+  });
+
   bot.onStatus((status) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('status', status);
@@ -223,8 +228,18 @@ function unregisterGlobalShortcuts() {
   }
 }
 
+function libraryMutated() {
+  remote.notifyLibraryUpdate();
+  homeserver.onLocalChange();
+}
+
 app.whenReady().then(async () => {
   await soundboard.init();
+  homeserver.onStatus((state) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('homeserver:status', state);
+    }
+  });
   createWindow();
   
   // Register global shortcuts after window is created
@@ -325,23 +340,23 @@ ipcMain.handle('sound:import', async () => {
     imported.push({ id, name: baseName, filename });
   }
   
-  remote.notifyLibraryUpdate();
+  libraryMutated();
   return imported;
 });
 
 ipcMain.handle('sound:delete', (_e, id) => {
   soundboard.deleteSound(id);
-  remote.notifyLibraryUpdate();
+  libraryMutated();
 });
 
 ipcMain.handle('sound:rename', (_e, id, name) => {
   soundboard.renameSound(id, name);
-  remote.notifyLibraryUpdate();
+  libraryMutated();
 });
 
 ipcMain.handle('sound:assignToGroup', (_e, soundId, groupId) => {
   soundboard.assignSoundToGroup(soundId, groupId);
-  remote.notifyLibraryUpdate();
+  libraryMutated();
 });
 
 // --- Group IPC ---
@@ -349,18 +364,18 @@ ipcMain.handle('group:getAll', () => soundboard.getAllGroups());
 
 ipcMain.handle('group:create', (_e, name) => {
   const result = soundboard.createGroup(name);
-  remote.notifyLibraryUpdate();
+  libraryMutated();
   return result;
 });
 
 ipcMain.handle('group:rename', (_e, id, name) => {
   soundboard.renameGroup(id, name);
-  remote.notifyLibraryUpdate();
+  libraryMutated();
 });
 
 ipcMain.handle('group:delete', (_e, id) => {
   soundboard.deleteGroup(id);
-  remote.notifyLibraryUpdate();
+  libraryMutated();
 });
 
 ipcMain.handle('group:toggleCollapsed', (_e, id) => {
@@ -405,7 +420,7 @@ ipcMain.handle('youtube:extract', async (_e, opts) => {
     youtubeEnd: end,
   });
 
-  remote.notifyLibraryUpdate();
+  libraryMutated();
   return { id, name, filename };
 });
 
@@ -492,6 +507,7 @@ ipcMain.handle('library:restore', async () => {
   
   const backupPath = result.filePaths[0];
   const restoreResult = await soundboard.restoreLibrary(backupPath);
+  homeserver.onLocalChange();
   return { success: true, ...restoreResult };
 });
 
@@ -519,6 +535,10 @@ ipcMain.handle('remote:stop', () => {
 ipcMain.handle('remote:status', () => {
   return remote.getStatus();
 });
+
+ipcMain.handle('homeserver:getState', () => homeserver.getState());
+
+ipcMain.handle('homeserver:sync', () => homeserver.syncNow());
 
 ipcMain.handle('remote:generateQR', async (_e, url) => {
   try {

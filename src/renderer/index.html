@@ -242,6 +242,40 @@
           </div>
         </div>
       </details>
+      <details class="setup-guide" id="home-server-section">
+        <summary>Home Server</summary>
+        <p style="margin: 8px 0; color: var(--text-muted); line-height: 1.6;">
+          Optional. Sync clips with a home-lab server on your LAN. Discord playback, local device mode, hotkeys, and the clip grid always use the library on this PC. If the server is offline, nothing blocks playback — status shows Offline and local edits stay queued for the next sync.
+        </p>
+        <p style="margin: 8px 0; color: var(--text-muted); line-height: 1.6;">
+          This is separate from LAN Web Remote, which controls this PC while it is on. The Discord bot token is never sent to the Home Server.
+        </p>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" id="setting-home-server-enabled"> Enable Home Server sync
+          </label>
+        </div>
+        <div id="home-server-config" class="hidden" style="margin-top: 16px;">
+          <div class="form-group">
+            <label for="setting-home-server-url">Base URL</label>
+            <input type="text" id="setting-home-server-url" placeholder="http://192.168.0.211:4092" autocomplete="off" spellcheck="false">
+            <p style="margin-top: 6px; font-size: 12px; color: var(--text-muted);">LAN address of the library service: <code>http://192.168.0.211:4092</code>.</p>
+          </div>
+          <div class="form-group">
+            <label for="setting-home-server-token">Auth token</label>
+            <input type="password" id="setting-home-server-token" placeholder="Shared secret" autocomplete="off">
+            <p style="margin-top: 6px; font-size: 12px; color: var(--text-muted);">Sent as <code>Authorization: Bearer</code> and <code>X-Api-Key</code>. Stored in settings.json, same as the bot token. Do not paste the Discord bot token here.</p>
+          </div>
+          <div id="home-server-status" style="margin: 16px 0; padding: 12px; border-radius: 5px; background: var(--bg-surface); border: 1px solid var(--border);">
+            <div style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Connection: <span id="home-server-status-text">Checking…</span></div>
+            <p id="home-server-message" style="margin: 0 0 10px 0; font-size: 12px; color: var(--text-muted); line-height: 1.5;"></p>
+            <button id="home-server-sync-btn" type="button">Sync now</button>
+          </div>
+          <p style="margin: 8px 0; font-size: 12px; color: var(--text-secondary); line-height: 1.6;">
+            <strong>Sync rule:</strong> the server's revision wins. Offline edits upload on the next sync. Clips that exist only on this PC are kept. Deletes come from the sync feed, not from a row missing in the full library.
+          </p>
+        </div>
+      </details>
       <details class="setup-guide">
         <summary>Software Updates</summary>
         <p style="margin: 8px 0; color: var(--text-muted);">Keep Mithium Sound up to date with the latest features and fixes.</p>

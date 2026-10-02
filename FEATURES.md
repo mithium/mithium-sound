@@ -108,6 +108,13 @@ If update available:
 - Download progress tracking
 - One-click install
 
+**Home Server (optional)**
+- Separate from LAN Web Remote
+- Enable, LAN base URL, auth token, connection status, Sync now
+- Playback, hotkeys, and the clip grid always use the local library
+- Unreachable server shows Offline and does not block use
+- See `docs/HOME_SERVER.md` for the live library API. Windows LAN base URL is `http://192.168.0.211:4092`.
+
 ## Technical Architecture
 
 ### Main Process (`src/main/`)
@@ -116,6 +123,7 @@ If update available:
 - `soundboard.js`: Sound library management
 - `youtube.js`: yt-dlp integration for extraction
 - `settings.js`: JSON settings persistence
+- `homeserver.js` and `sync/`: optional Home Server client (offline-first)
 
 ### Renderer Process (`src/renderer/`)
 - `index.html`: UI structure
@@ -137,11 +145,16 @@ If update available:
   "autoConnect": false,
   "volume": 100,
   "outputMode": "both",
-  "selectedDeviceId": "ABC123..."
+  "selectedDeviceId": "ABC123...",
+  "homeServerEnabled": false,
+  "homeServerUrl": "http://192.168.0.211:4092",
+  "homeServerToken": ""
 }
 ```
 
 Stored in: `%APPDATA%/mithium-sound/settings.json`
+
+Home Server URL and token use this same file (with the Discord bot token and the LAN remote PIN). Sync does not send the bot token. Contract and sync rule: `docs/HOME_SERVER.md`.
 
 ## Update Workflow
 ```

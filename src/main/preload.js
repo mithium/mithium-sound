@@ -54,6 +54,10 @@ contextBridge.exposeInMainWorld('api', {
   remoteStatus: () => ipcRenderer.invoke('remote:status'),
   remoteGenerateQR: (url) => ipcRenderer.invoke('remote:generateQR', url),
 
+  // Home Server (optional LAN library sync; playback stays local)
+  homeServerGetState: () => ipcRenderer.invoke('homeserver:getState'),
+  homeServerSync: () => ipcRenderer.invoke('homeserver:sync'),
+
   // Events from main
   onStatus: (cb) => {
     ipcRenderer.on('status', (_e, data) => cb(data));
@@ -86,5 +90,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   onGlobalHotkeyKeyup: (cb) => {
     ipcRenderer.on('global-hotkey:keyup', (_e, key) => cb(key));
+  },
+  onHomeServerStatus: (cb) => {
+    ipcRenderer.on('homeserver:status', (_e, state) => cb(state));
   },
 });
