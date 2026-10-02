@@ -379,3 +379,38 @@ ipcMain.handle('update:download', async () => {
 ipcMain.handle('update:install', () => {
   autoUpdater.quitAndInstall(false, true);
 });
+
+// --- Sound Library Backup IPC ---
+ipcMain.handle('library:getInfo', () => {
+  return soundboard.getLibraryInfo();
+});
+
+ipcMain.handle('library:backup', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select Backup Location',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  
+  if (result.canceled || !result.filePaths.length) {
+    return { canceled: true };
+  }
+  
+  const backupDir = result.filePaths[0];
+  const backupResult = await soundboard.backupLibrary(backupDir);
+  return { success: true, ...backupResult };
+});
+
+ipcMain.handle('library:restore', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select Backup Folder to Restore',
+    properties: ['openDirectory'],
+  });
+  
+  if (result.canceled || !result.filePaths.length) {
+    return { canceled: true };
+  }
+  
+  const backupPath = result.filePaths[0];
+  const restoreResult = await soundboard.restoreLibrary(backupPath);
+  return { success: true, ...restoreResult };
+});

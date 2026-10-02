@@ -217,6 +217,27 @@
           </div>
         </div>
       </details>
+      <details class="setup-guide">
+        <summary>Sound Library Backup</summary>
+        <p style="margin: 8px 0; color: var(--text-muted);">Backup your entire sound library (all sounds + database) to protect against data loss from reinstalls, updates, or system issues.</p>
+        <div id="library-info" style="margin: 12px 0; padding: 10px; border-radius: 5px; background: var(--bg-surface); border: 1px solid var(--border);">
+          <div style="font-size: 13px; line-height: 1.8; color: var(--text-secondary);">
+            <div><strong>Sounds:</strong> <span id="library-sound-count">—</span></div>
+            <div><strong>Groups:</strong> <span id="library-group-count">—</span></div>
+            <div><strong>Total Size:</strong> <span id="library-size">—</span> MB</div>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;"><strong>Location:</strong> <span id="library-path">—</span></div>
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; margin: 12px 0;">
+          <button id="library-backup-btn" type="button" style="flex: 1;">Backup Library</button>
+          <button id="library-restore-btn" type="button" style="flex: 1;">Restore from Backup</button>
+        </div>
+        <p style="margin: 8px 0; font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+          <strong>Backup:</strong> Saves all sounds and data to a folder you choose. Keep this backup in a safe location (external drive, cloud storage, etc.).<br>
+          <strong>Restore:</strong> Replaces your current library with a backup. Your current library is saved to a temporary location as a safety measure.
+        </p>
+        <div id="library-status" class="hidden" style="margin-top: 10px; padding: 8px; border-radius: 5px; font-size: 12px;"></div>
+      </details>
       <button id="settings-save-btn">Save Settings</button>
       <p id="settings-status" class="hidden"></p>
     </div>

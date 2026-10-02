@@ -981,6 +981,110 @@ window.api.onUpdateError((message) => {
   $('#update-progress-container').classList.add('hidden');
 });
 
+// --- Library Backup ---
+async function updateLibraryInfo() {
+  try {
+    const info = await window.api.libraryGetInfo();
+    $('#library-sound-count').textContent = info.soundCount;
+    $('#library-group-count').textContent = info.groupCount;
+    $('#library-size').textContent = info.totalSizeMB;
+    $('#library-path').textContent = info.soundsDir;
+  } catch (err) {
+    console.error('Failed to get library info:', err);
+  }
+}
+
+$('#library-backup-btn').addEventListener('click', async () => {
+  const btn = $('#library-backup-btn');
+  const statusEl = $('#library-status');
+  
+  btn.disabled = true;
+  btn.textContent = 'Creating Backup...';
+  statusEl.classList.add('hidden');
+  
+  try {
+    const result = await window.api.libraryBackup();
+    
+    if (result.canceled) {
+      btn.textContent = 'Backup Library';
+      btn.disabled = false;
+      return;
+    }
+    
+    statusEl.textContent = `✓ Backup created successfully! ${result.soundsCopied} of ${result.totalSounds} sounds backed up to: ${result.backupPath}`;
+    statusEl.style.background = 'var(--success-bg, #1a4d2e)';
+    statusEl.style.color = 'var(--success-text, #4ade80)';
+    statusEl.classList.remove('hidden');
+  } catch (err) {
+    statusEl.textContent = `✗ Backup failed: ${err.message}`;
+    statusEl.style.background = 'var(--error-bg, #4d1a1a)';
+    statusEl.style.color = 'var(--error-text, #f87171)';
+    statusEl.classList.remove('hidden');
+  } finally {
+    btn.textContent = 'Backup Library';
+    btn.disabled = false;
+  }
+});
+
+$('#library-restore-btn').addEventListener('click', async () => {
+  const btn = $('#library-restore-btn');
+  const statusEl = $('#library-status');
+  
+  const confirmed = confirm(
+    'Restore from backup?\n\n' +
+    'This will replace your current sound library with the backup. ' +
+    'Your current library will be saved to a temporary location as a safety measure.\n\n' +
+    'Click OK to continue.'
+  );
+  
+  if (!confirmed) return;
+  
+  btn.disabled = true;
+  btn.textContent = 'Restoring...';
+  statusEl.classList.add('hidden');
+  
+  try {
+    const result = await window.api.libraryRestore();
+    
+    if (result.canceled) {
+      btn.textContent = 'Restore from Backup';
+      btn.disabled = false;
+      return;
+    }
+    
+    statusEl.textContent = `✓ Restore completed! ${result.restoredCount} sounds restored from backup created on ${new Date(result.manifest.backupDate).toLocaleString()}. Your previous library was saved to: ${result.tempBackupPath}`;
+    statusEl.style.background = 'var(--success-bg, #1a4d2e)';
+    statusEl.style.color = 'var(--success-text, #4ade80)';
+    statusEl.classList.remove('hidden');
+    
+    // Reload the sound grid
+    await loadSounds();
+    await updateLibraryInfo();
+  } catch (err) {
+    statusEl.textContent = `✗ Restore failed: ${err.message}`;
+    statusEl.style.background = 'var(--error-bg, #4d1a1a)';
+    statusEl.style.color = 'var(--error-text, #f87171)';
+    statusEl.classList.remove('hidden');
+  } finally {
+    btn.textContent = 'Restore from Backup';
+    btn.disabled = false;
+  }
+});
+
+// Update library info when settings tab is opened
+const tabButtons = document.querySelectorAll('.tab');
+tabButtons.forEach(btn => {
+  const originalClick = btn.onclick;
+  btn.addEventListener('click', () => {
+    if (btn.dataset.tab === 'settings') {
+      updateLibraryInfo();
+    }
+  });
+});
+
+// Initial library info load
+updateLibraryInfo();
+
 function formatBytes(bytes) {
   if (bytes === 0) return '0 B';
   const k = 1024;
