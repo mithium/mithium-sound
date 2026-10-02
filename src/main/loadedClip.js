@@ -139,9 +139,6 @@ function createLoadedClipService({ injector, getSounds, readSettings, writeSetti
       if (hooks && hooks.onHardStop) hooks.onHardStop({ notifyRenderer: false });
       return decision;
     },
-    mouseDown(button, now) {
-      return control.mouseDown(button, now);
-    },
     async onLibraryChanged() {
       await dropIfMissing();
     },

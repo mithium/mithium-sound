@@ -4,13 +4,7 @@
 // When auto-hold is on (the default), the matching key is treated as held
 // until the clip ends or a hard stop releases it. Physical keyup does not
 // stop playback; the caller re-asserts the key-down so Windows stays held.
-//
-// Double-click: two DOWN events of the same mouse button within
-// DOUBLE_CLICK_MS (500, matching the usual Windows double-click time).
-// Left and right are tracked separately. A left click plus a right click
-// is not a double-click.
-
-const DOUBLE_CLICK_MS = 500;
+// Hard stop is Delete, the Windows Stop button, or Stop on the phone remote.
 
 function createController(initial = {}) {
   let loadedId = normalizeId(initial.loadedId);
@@ -18,7 +12,6 @@ function createController(initial = {}) {
   let simulatedKey = null;
   let playbackActive = false;
   let releasing = null;
-  const lastMouseDown = { left: 0, right: 0 };
 
   function snapshot() {
     return {
@@ -86,19 +79,6 @@ function createController(initial = {}) {
     return { type: 'play-failed', key: takeRelease() };
   }
 
-  function mouseDown(button, now) {
-    if (button !== 'left' && button !== 'right') {
-      return { doubleClick: false, button };
-    }
-    const previous = lastMouseDown[button] || 0;
-    lastMouseDown[button] = now;
-    if (previous && now - previous <= DOUBLE_CLICK_MS && now >= previous) {
-      lastMouseDown[button] = 0;
-      return { doubleClick: true, button };
-    }
-    return { doubleClick: false, button };
-  }
-
   return {
     snapshot,
     setLoaded,
@@ -108,7 +88,6 @@ function createController(initial = {}) {
     hardStop,
     clipEnded,
     playFailed,
-    mouseDown,
   };
 }
 
@@ -121,19 +100,8 @@ function normalizeId(id) {
 
 function classifyGlobalEvent(event) {
   if (!event || typeof event !== 'object') return null;
-  let name = event.name || '';
-  if (name === 'LBUTTON') name = 'MOUSE LEFT';
-  if (name === 'RBUTTON') name = 'MOUSE RIGHT';
-  if (!name && event.vKey === 1) name = 'MOUSE LEFT';
-  if (!name && event.vKey === 2) name = 'MOUSE RIGHT';
+  const name = event.name || '';
   const down = event.state === 'DOWN';
-  if (name === 'MOUSE LEFT' || name === 'MOUSE RIGHT') {
-    return {
-      kind: 'mouse',
-      button: name === 'MOUSE LEFT' ? 'left' : 'right',
-      down,
-    };
-  }
   if (name === 'V' || name === 'T' || name === 'DELETE') {
     return {
       kind: 'key',
@@ -145,7 +113,6 @@ function classifyGlobalEvent(event) {
 }
 
 module.exports = {
-  DOUBLE_CLICK_MS,
   createController,
   classifyGlobalEvent,
   normalizeId,

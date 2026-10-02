@@ -157,7 +157,7 @@ function createWindow() {
 
   mainWindow.on('close', (event) => {
     if (app.isQuitting) return;
-    // Keep the process alive so global V/T, Delete, and mouse hooks still run.
+    // Keep the process alive so global V/T and Delete hooks still run.
     event.preventDefault();
     mainWindow.hide();
   });
@@ -337,26 +337,16 @@ function registerGlobalShortcuts() {
     keyboardListener = new GlobalKeyboardListener();
     
     // Same low-level hook used since global V/T/Delete (v1.8.10+).
-    // It receives keys and mouse buttons while the window is hidden, minimized,
-    // or unfocused (including a fullscreen game). The hook dies if the process
-    // is quit; closing the window hides to the tray instead.
-    //
-    // Mouse double-click: two DOWN events for the same button, MOUSE LEFT
-    // (VK 0x01) or MOUSE RIGHT (VK 0x02), within 500ms. See loadedClipControl.
+    // It receives keys while the window is hidden, minimized, or unfocused
+    // (including a fullscreen game). The hook dies if the process is quit;
+    // closing the window hides to the tray instead.
+    // Mouse buttons are not bound. Hard stop is Delete, the Windows Stop
+    // button, or Stop on the phone remote.
     keyboardListener.addListener((e, down) => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
 
       const classified = classifyGlobalEvent(e);
-      if (!classified) return;
-
-      if (classified.kind === 'mouse') {
-        if (!classified.down) return;
-        const service = loadedClip.getService();
-        if (!service) return;
-        const click = service.mouseDown(classified.button, Date.now());
-        if (click.doubleClick) performHardStop({ notifyRenderer: true });
-        return;
-      }
+      if (!classified || classified.kind !== 'key') return;
 
       const modified = down['LEFT ALT'] || down['RIGHT ALT'] ||
         down['LEFT CTRL'] || down['RIGHT CTRL'] ||
@@ -364,7 +354,7 @@ function registerGlobalShortcuts() {
       if (modified) return;
 
       // Focused window: renderer handles V/T/Delete so text fields still work.
-      // Unfocused / tray: this hook is the only path.
+      // Unfocused / tray: this hook is the only path for those keys.
       if (mainWindow.isFocused()) return;
 
       if (classified.down) {
@@ -378,7 +368,7 @@ function registerGlobalShortcuts() {
       }
     });
     
-    console.log('Global keyboard listener started for V, T, Delete, and mouse double-click');
+    console.log('Global keyboard listener started for V, T, and Delete');
   } catch (err) {
     console.error('Failed to start global keyboard listener:', err);
   }

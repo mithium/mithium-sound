@@ -4,7 +4,6 @@
 
 const assert = require('assert');
 const {
-  DOUBLE_CLICK_MS,
   createController,
   classifyGlobalEvent,
 } = require('../src/main/loadedClipControl');
@@ -107,19 +106,7 @@ function fakeInjector() {
     assert.strictEqual(control.snapshot().autoHold, false);
   });
 
-  await test('double-click is two downs of the same button within 500ms', () => {
-    const control = createController({ loadedId: 1 });
-    assert.strictEqual(DOUBLE_CLICK_MS, 500);
-    assert.strictEqual(control.mouseDown('left', 1000).doubleClick, false);
-    assert.strictEqual(control.mouseDown('right', 1200).doubleClick, false);
-    assert.strictEqual(control.mouseDown('left', 1500).doubleClick, true);
-    assert.strictEqual(control.mouseDown('left', 1500 + DOUBLE_CLICK_MS).doubleClick, false);
-    assert.strictEqual(control.mouseDown('left', 1500 + DOUBLE_CLICK_MS + DOUBLE_CLICK_MS).doubleClick, true);
-    assert.strictEqual(control.mouseDown('right', 4000).doubleClick, false);
-    assert.strictEqual(control.mouseDown('right', 4000 + DOUBLE_CLICK_MS + 1).doubleClick, false);
-  });
-
-  await test('global events map V, T, Delete, and either mouse button, not B', () => {
+  await test('global events map V, T, and Delete, and ignore mouse buttons and B', () => {
     assert.deepStrictEqual(classifyGlobalEvent({ name: 'V', state: 'DOWN' }), {
       kind: 'key', key: 'v', down: true,
     });
@@ -129,16 +116,10 @@ function fakeInjector() {
     assert.deepStrictEqual(classifyGlobalEvent({ name: 'DELETE', state: 'DOWN' }), {
       kind: 'key', key: 'Delete', down: true,
     });
-    assert.deepStrictEqual(classifyGlobalEvent({ name: 'MOUSE LEFT', state: 'DOWN' }), {
-      kind: 'mouse', button: 'left', down: true,
-    });
-    assert.deepStrictEqual(classifyGlobalEvent({ name: 'MOUSE RIGHT', state: 'DOWN' }), {
-      kind: 'mouse', button: 'right', down: true,
-    });
+    assert.strictEqual(classifyGlobalEvent({ name: 'MOUSE LEFT', state: 'DOWN' }), null);
+    assert.strictEqual(classifyGlobalEvent({ name: 'MOUSE RIGHT', state: 'DOWN' }), null);
     assert.strictEqual(classifyGlobalEvent({ name: 'B', state: 'DOWN' }), null);
-    assert.deepStrictEqual(classifyGlobalEvent({ vKey: 1, state: 'DOWN' }), {
-      kind: 'mouse', button: 'left', down: true,
-    });
+    assert.strictEqual(classifyGlobalEvent({ vKey: 1, state: 'DOWN' }), null);
   });
 
   await test('service sends a real key-up on hard stop and a key-down when re-holding', async () => {
