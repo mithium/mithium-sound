@@ -5,8 +5,8 @@
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
-    "postinstall": "node scripts/patch-voice.js",
-    "build": "node scripts/patch-voice.js && electron-builder --win nsis zip"
+    "postinstall": "node scripts/patch-voice.js && node scripts/extract-ffmpeg.js",
+    "build": "node scripts/patch-voice.js && node scripts/extract-ffmpeg.js && electron-builder --win nsis zip"
   },
   "author": "Mithium",
   "license": "MIT",
