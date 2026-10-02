@@ -3,76 +3,53 @@ const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 
-// Get ffmpeg path with proper handling for packaged apps
-function getFfmpegPath() {
-  try {
-    if (app.isPackaged) {
-      // In packaged app, ffmpeg.exe is in resources/bin/
-      const resourcePath = path.join(process.resourcesPath, 'bin', 'ffmpeg.exe');
-      if (fs.existsSync(resourcePath)) {
-        console.log('Using bundled ffmpeg at:', resourcePath);
-        return resourcePath;
-      }
-      console.error('Bundled ffmpeg not found at:', resourcePath);
-      return null;
-    }
-    // Development mode - try ffmpeg-static
+// Setup FFmpeg for prism-media / @discordjs/voice
+// ffmpeg-static checks process.env.FFMPEG_BIN, so set it before requiring anything
+function setupFFmpeg() {
+  let ffmpegPath;
+  
+  if (app.isPackaged) {
+    // Production: use bundled ffmpeg.exe from extraResources (resources/bin/)
+    ffmpegPath = path.join(process.resourcesPath, 'bin', 'ffmpeg.exe');
+    console.log('Using bundled ffmpeg.exe:', ffmpegPath);
+  } else {
+    // Development: try ffmpeg-static first, then fallback to extracted binary
     try {
-      const ffmpegPath = require('ffmpeg-static');
-      console.log('ffmpeg-static found at:', ffmpegPath);
-      return ffmpegPath;
-    } catch {
+      ffmpegPath = require('ffmpeg-static');
+      console.log('Using ffmpeg-static in dev mode:', ffmpegPath);
+    } catch (err) {
       // Fallback to extracted binary in dev
       const devPath = path.join(__dirname, '..', '..', 'bin', 'win', 'ffmpeg.exe');
       if (fs.existsSync(devPath)) {
-        console.log('Using extracted ffmpeg at:', devPath);
-        return devPath;
+        ffmpegPath = devPath;
+        console.log('Using extracted ffmpeg at:', ffmpegPath);
+      } else {
+        console.error('ffmpeg-static not found and no extracted binary:', err.message);
+        return;
       }
-      console.error('No ffmpeg binary found in development');
-      return null;
     }
-  } catch (err) {
-    console.error('Failed to locate ffmpeg:', err.message);
-    return null;
   }
-}
-
-// Setup FFmpeg for prism-media
-function setupFFmpeg() {
-  const ffmpegPath = getFfmpegPath();
-  if (!ffmpegPath) {
-    console.error('FFmpeg not available');
+  
+  // Verify ffmpeg exists
+  if (!fs.existsSync(ffmpegPath)) {
+    console.error('FFmpeg binary not found at:', ffmpegPath);
     return;
   }
   
+  // Set FFMPEG_BIN env var so ffmpeg-static module exports our bundled path
+  // When prism-media calls require('ffmpeg-static'), it will get this path
+  process.env.FFMPEG_BIN = ffmpegPath;
+  console.log('Set FFMPEG_BIN:', process.env.FFMPEG_BIN);
+  
+  // Verify prism-media can find it via ffmpeg-static
   try {
-    // Force prism-media to find our bundled FFmpeg
+    // Clear require cache for ffmpeg-static to pick up the env var
+    delete require.cache[require.resolve('ffmpeg-static')];
     const prism = require('prism-media');
     const info = prism.FFmpeg.getInfo(true);
-    console.log('FFmpeg found by prism-media:', info.command);
+    console.log('prism-media FFmpeg verified:', info.command);
   } catch (err) {
-    console.error('FFmpeg setup failed:', err.message);
-    // Try monkey-patching as fallback
-    try {
-      const prism = require('prism-media');
-      const cp = require('child_process');
-      const result = cp.spawnSync(ffmpegPath, ['-version'], { windowsHide: true });
-      if (!result.error) {
-        const origGetInfo = prism.FFmpeg.getInfo.bind(prism.FFmpeg);
-        prism.FFmpeg.getInfo = function(force) {
-          try { return origGetInfo(force); } catch {
-            return {
-              command: ffmpegPath,
-              output: Buffer.concat(result.output.filter(Boolean)).toString(),
-              get version() { return this.output.match(/version (\S+)/)?.[1] ?? 'unknown'; },
-            };
-          }
-        };
-        console.log('Patched prism-media to use ffmpeg-static:', ffmpegPath);
-      }
-    } catch (patchErr) {
-      console.error('FFmpeg monkey-patch also failed:', patchErr.message);
-    }
+    console.error('prism-media FFmpeg.getInfo() failed:', err.message);
   }
 }
 setupFFmpeg();
@@ -331,10 +308,14 @@ ipcMain.handle('youtube:extract', async (_e, opts) => {
   const filename = `${Date.now()}-yt-${name.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp3`;
   const outputPath = path.join(soundboard.getSoundsDir(), filename);
   
-  // Get FFmpeg path using the same function as prism-media
-  const ffmpegPath = getFfmpegPath();
+  // Get FFmpeg path from env var (set by setupFFmpeg at startup)
+  const ffmpegPath = process.env.FFMPEG_BIN;
+  if (!ffmpegPath) {
+    throw new Error('FFmpeg not configured - app may not be properly initialized');
+  }
+  
   const ytdlpPath = resolveYtdlpPath();
-  const ffmpegDir = ffmpegPath ? path.dirname(ffmpegPath) : '';
+  const ffmpegDir = path.dirname(ffmpegPath);
 
   await youtube.extractClip({
     url,
