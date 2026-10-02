@@ -25,6 +25,86 @@ const volumeSlider = $('#volume-slider');
 const volumeValue = $('#volume-value');
 const contextMenu = $('#context-menu');
 
+// --- Modal Dialog System ---
+const modalOverlay = $('#modal-overlay');
+const modalDialog = $('#modal-dialog');
+const modalTitle = $('#modal-title');
+const modalMessage = $('#modal-message');
+const modalInput = $('#modal-input');
+const modalCancelBtn = $('#modal-cancel-btn');
+const modalConfirmBtn = $('#modal-confirm-btn');
+
+let modalResolve = null;
+
+function showModal({ title, message, input = false, defaultValue = '', confirmText = 'OK', cancelText = 'Cancel' }) {
+  return new Promise((resolve) => {
+    modalResolve = resolve;
+    
+    modalTitle.textContent = title;
+    modalMessage.textContent = message;
+    modalConfirmBtn.textContent = confirmText;
+    modalCancelBtn.textContent = cancelText;
+    
+    if (input) {
+      modalInput.classList.remove('hidden');
+      modalInput.value = defaultValue;
+      modalInput.focus();
+    } else {
+      modalInput.classList.add('hidden');
+    }
+    
+    modalOverlay.classList.remove('hidden');
+    
+    setTimeout(() => {
+      if (input) {
+        modalInput.select();
+      } else {
+        modalConfirmBtn.focus();
+      }
+    }, 50);
+  });
+}
+
+function closeModal(result) {
+  modalOverlay.classList.add('hidden');
+  if (modalResolve) {
+    modalResolve(result);
+    modalResolve = null;
+  }
+}
+
+modalCancelBtn.addEventListener('click', () => closeModal(null));
+modalConfirmBtn.addEventListener('click', () => {
+  if (!modalInput.classList.contains('hidden')) {
+    closeModal(modalInput.value);
+  } else {
+    closeModal(true);
+  }
+});
+
+modalInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    closeModal(modalInput.value);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeModal(null);
+  }
+});
+
+modalOverlay.addEventListener('click', (e) => {
+  if (e.target === modalOverlay) {
+    closeModal(null);
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !modalOverlay.classList.contains('hidden')) {
+    e.preventDefault();
+    closeModal(null);
+  }
+});
+
 // --- Tabs ---
 $$('.tab').forEach((tab) => {
   tab.addEventListener('click', () => {
@@ -129,12 +209,14 @@ async function autoSaveSettings() {
   
   await window.api.settingsSave(data);
   
-  // Show saved indicator briefly
+  // Show saved indicator briefly (if element exists)
   const status = $('#settings-status');
-  status.textContent = 'Saved';
-  status.className = 'success-text';
-  status.classList.remove('hidden');
-  setTimeout(() => status.classList.add('hidden'), 1500);
+  if (status) {
+    status.textContent = 'Saved';
+    status.className = 'success-text';
+    status.classList.remove('hidden');
+    setTimeout(() => status.classList.add('hidden'), 1500);
+  }
 }
 
 // Output mode change handler - includes Discord leave logic
@@ -311,7 +393,12 @@ joinBtn.addEventListener('click', async () => {
   const settings = await window.api.settingsGet();
   const outputMode = settings.outputMode || 'discord';
   if (outputMode === 'local') {
-    alert('Cannot join Discord voice channel in "Local Device Only" mode.\n\nChange Output Mode to "Discord Bot Only" or "Both" in Settings to enable Discord bot voice.');
+    await showModal({
+      title: 'Cannot Join Channel',
+      message: 'Cannot join Discord voice channel in "Local Device Only" mode.\n\nChange Output Mode to "Discord Bot Only" or "Both" in Settings to enable Discord bot voice.',
+      confirmText: 'OK',
+      cancelText: 'Settings'
+    });
     return;
   }
   
@@ -320,7 +407,11 @@ joinBtn.addEventListener('click', async () => {
     await window.api.botJoinChannel(channelId);
     leaveBtn.classList.remove('hidden');
   } catch (err) {
-    alert(`Failed to join: ${err.message}`);
+    await showModal({
+      title: 'Failed to Join',
+      message: `Failed to join: ${err.message}`,
+      confirmText: 'OK'
+    });
   }
   joinBtn.disabled = false;
 });
@@ -485,7 +576,13 @@ async function toggleGroup(groupId) {
 }
 
 async function createGroupPrompt() {
-  const name = prompt('Enter group name:');
+  const name = await showModal({
+    title: 'Create New Group',
+    message: 'Enter a name for the new group:',
+    input: true,
+    confirmText: 'Create'
+  });
+  
   if (name && name.trim()) {
     await window.api.groupCreate(name.trim());
     await refreshSounds();
@@ -493,7 +590,14 @@ async function createGroupPrompt() {
 }
 
 async function renameGroupPrompt(groupId, currentName) {
-  const newName = prompt('Rename group:', currentName);
+  const newName = await showModal({
+    title: 'Rename Group',
+    message: 'Enter a new name for this group:',
+    input: true,
+    defaultValue: currentName,
+    confirmText: 'Rename'
+  });
+  
   if (newName && newName.trim() && newName.trim() !== currentName) {
     await window.api.groupRename(groupId, newName.trim());
     await refreshSounds();
@@ -501,7 +605,14 @@ async function renameGroupPrompt(groupId, currentName) {
 }
 
 async function deleteGroupPrompt(groupId, groupName) {
-  if (confirm(`Delete group "${groupName}"? Sounds in this group will become ungrouped.`)) {
+  const confirmed = await showModal({
+    title: 'Delete Group',
+    message: `Delete group "${groupName}"? Sounds in this group will become ungrouped.`,
+    confirmText: 'Delete',
+    cancelText: 'Cancel'
+  });
+  
+  if (confirmed) {
     await window.api.groupDelete(groupId);
     await refreshSounds();
   }
@@ -574,7 +685,11 @@ async function playSound(id) {
           leaveBtn.classList.remove('hidden');
         } catch (err) {
           if (outputMode === 'discord') {
-            alert(`Failed to auto-join channel: ${err.message}`);
+            await showModal({
+              title: 'Auto-Join Failed',
+              message: `Failed to auto-join channel: ${err.message}`,
+              confirmText: 'OK'
+            });
             return;
           }
         }
@@ -590,7 +705,11 @@ async function playSound(id) {
     playingId = id;
     renderSoundGrid();
   } catch (err) {
-    alert(`Playback error: ${err.message}`);
+    await showModal({
+      title: 'Playback Error',
+      message: `Playback error: ${err.message}`,
+      confirmText: 'OK'
+    });
   }
 }
 
@@ -652,7 +771,15 @@ submenuContent.addEventListener('click', async (e) => {
 contextMenu.querySelector('[data-action="rename"]').addEventListener('click', async () => {
   if (!contextTarget) return;
   const sound = sounds.find((s) => s.id === contextTarget);
-  const newName = prompt('Rename sound:', sound?.name || '');
+  
+  const newName = await showModal({
+    title: 'Rename Sound',
+    message: 'Enter a new name for this sound:',
+    input: true,
+    defaultValue: sound?.name || '',
+    confirmText: 'Rename'
+  });
+  
   if (newName && newName.trim()) {
     await window.api.soundRename(contextTarget, newName.trim());
     await refreshSounds();
@@ -662,7 +789,15 @@ contextMenu.querySelector('[data-action="rename"]').addEventListener('click', as
 contextMenu.querySelector('[data-action="delete"]').addEventListener('click', async () => {
   if (!contextTarget) return;
   const sound = sounds.find((s) => s.id === contextTarget);
-  if (confirm(`Delete "${sound?.name}"?`)) {
+  
+  const confirmed = await showModal({
+    title: 'Delete Sound',
+    message: `Delete "${sound?.name}"? This cannot be undone.`,
+    confirmText: 'Delete',
+    cancelText: 'Cancel'
+  });
+  
+  if (confirmed) {
     if (contextTarget === armedClipId) {
       armedClipId = null;
     }
@@ -950,7 +1085,11 @@ window.api.onStatus((status) => {
       break;
     case 'error':
       console.error('Bot error:', status.message);
-      alert(`Bot error: ${status.message}`);
+      showModal({
+        title: 'Bot Error',
+        message: `Bot error: ${status.message}`,
+        confirmText: 'OK'
+      });
       break;
   }
 });
@@ -1108,12 +1247,12 @@ $('#library-restore-btn').addEventListener('click', async () => {
   const btn = $('#library-restore-btn');
   const statusEl = $('#library-status');
   
-  const confirmed = confirm(
-    'Restore from backup?\n\n' +
-    'This will replace your current sound library with the backup. ' +
-    'Your current library will be saved to a temporary location as a safety measure.\n\n' +
-    'Click OK to continue.'
-  );
+  const confirmed = await showModal({
+    title: 'Restore from Backup',
+    message: 'This will replace your current sound library with the backup. Your current library will be saved to a temporary location as a safety measure.\n\nDo you want to continue?',
+    confirmText: 'Restore',
+    cancelText: 'Cancel'
+  });
   
   if (!confirmed) return;
   
