@@ -3,56 +3,44 @@ const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 
-// Resolve bundled bin directory and add to PATH before loading anything
-let bundledBinDir = null;
-function setupBundledBinPath() {
-  const candidates = [
-    path.join(process.resourcesPath, 'bin'),             // packaged app
-    path.join(__dirname, '..', '..', 'bin', 'win'),      // dev mode
-  ];
-  for (const dir of candidates) {
-    if (fs.existsSync(dir)) {
-      bundledBinDir = dir;
-      const sep = process.platform === 'win32' ? ';' : ':';
-      process.env.PATH = dir + sep + (process.env.PATH || '');
-      console.log('Bundled bin dir:', dir);
-      console.log('Contents:', fs.readdirSync(dir));
-      break;
-    }
-  }
-}
-setupBundledBinPath();
-
-// Force prism-media to find our bundled FFmpeg before anything uses it
-try {
-  const prism = require('prism-media');
-  const info = prism.FFmpeg.getInfo(true);
-  console.log('FFmpeg found by prism-media:', info.command);
-} catch (err) {
-  console.error('prism-media FFmpeg detection failed:', err.message);
-  // Monkey-patch prism-media to use our bundled ffmpeg directly
-  if (bundledBinDir) {
+// Setup FFmpeg for prism-media
+function setupFFmpeg() {
+  try {
+    // Try to get ffmpeg-static path (bundled with app)
+    const ffmpegPath = require('ffmpeg-static');
+    console.log('ffmpeg-static found at:', ffmpegPath);
+    
+    // Force prism-media to find our bundled FFmpeg
     const prism = require('prism-media');
-    const ffmpegExe = path.join(bundledBinDir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
-    const cp = require('child_process');
-    const result = cp.spawnSync(ffmpegExe, ['-h'], { windowsHide: true });
-    if (!result.error) {
-      const origGetInfo = prism.FFmpeg.getInfo.bind(prism.FFmpeg);
-      prism.FFmpeg.getInfo = function(force) {
-        try { return origGetInfo(force); } catch {
-          return {
-            command: ffmpegExe,
-            output: Buffer.concat(result.output.filter(Boolean)).toString(),
-            get version() { return this.output.match(/version (\S+)/)?.[1] ?? 'unknown'; },
-          };
-        }
-      };
-      console.log('Patched prism-media to use bundled FFmpeg:', ffmpegExe);
-    } else {
-      console.error('Bundled FFmpeg also failed:', result.error.message);
+    const info = prism.FFmpeg.getInfo(true);
+    console.log('FFmpeg found by prism-media:', info.command);
+  } catch (err) {
+    console.error('FFmpeg setup failed:', err.message);
+    // Try monkey-patching as fallback
+    try {
+      const ffmpegPath = require('ffmpeg-static');
+      const prism = require('prism-media');
+      const cp = require('child_process');
+      const result = cp.spawnSync(ffmpegPath, ['-version'], { windowsHide: true });
+      if (!result.error) {
+        const origGetInfo = prism.FFmpeg.getInfo.bind(prism.FFmpeg);
+        prism.FFmpeg.getInfo = function(force) {
+          try { return origGetInfo(force); } catch {
+            return {
+              command: ffmpegPath,
+              output: Buffer.concat(result.output.filter(Boolean)).toString(),
+              get version() { return this.output.match(/version (\S+)/)?.[1] ?? 'unknown'; },
+            };
+          }
+        };
+        console.log('Patched prism-media to use ffmpeg-static:', ffmpegPath);
+      }
+    } catch (patchErr) {
+      console.error('FFmpeg monkey-patch also failed:', patchErr.message);
     }
   }
 }
+setupFFmpeg();
 
 const bot = require('./bot');
 const soundboard = require('./soundboard');
@@ -106,17 +94,14 @@ autoUpdater.on('update-downloaded', (info) => {
   }
 });
 
-// Resolve a bundled binary to its full path
+// Resolve a bundled binary to its full path (for yt-dlp, etc.)
 function resolveBin(name) {
-  if (bundledBinDir) {
-    const full = path.join(bundledBinDir, name);
-    if (fs.existsSync(full)) return full;
-  }
-  return name; // fallback to PATH lookup
+  // For yt-dlp, check if it's in PATH or settings
+  return name;
 }
 
 function resolveYtdlpPath() {
-  return settings.get('ytdlpPath') || resolveBin('yt-dlp.exe');
+  return settings.get('ytdlpPath') || 'yt-dlp';
 }
 
 function getIconPath() {
@@ -306,9 +291,17 @@ ipcMain.handle('youtube:extract', async (_e, opts) => {
   const { url, start, end, name } = opts;
   const filename = `${Date.now()}-yt-${name.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp3`;
   const outputPath = path.join(soundboard.getSoundsDir(), filename);
-  // Use full paths to bundled binaries; settings can override
+  
+  // Get FFmpeg path from ffmpeg-static
+  let ffmpegPath = null;
+  try {
+    ffmpegPath = require('ffmpeg-static');
+  } catch (err) {
+    console.error('ffmpeg-static not found for YouTube extraction:', err.message);
+  }
+  
   const ytdlpPath = resolveYtdlpPath();
-  const ffmpegDir = bundledBinDir || '';
+  const ffmpegDir = ffmpegPath ? path.dirname(ffmpegPath) : '';
 
   await youtube.extractClip({
     url,
