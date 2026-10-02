@@ -1,6 +1,6 @@
 {
   "name": "mithium-sound",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "description": "Discord soundboard desktop app",
   "main": "src/main/index.js",
   "scripts": {
