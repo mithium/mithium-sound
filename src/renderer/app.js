@@ -105,6 +105,9 @@ async function loadSettings() {
   
   holdToPlayActive = s.holdToPlayMode || false;
   
+  // Update UI state based on output mode
+  updateOutputModeUI(s.outputMode || 'discord');
+  
   await enumerateDevices();
   $('#setting-device').value = s.selectedDeviceId || 'default';
   
@@ -135,12 +138,43 @@ async function autoSaveSettings() {
 }
 
 // Output mode change handler - includes Discord leave logic
+// Update UI state based on output mode
+function updateOutputModeUI(outputMode) {
+  const isLocal = outputMode === 'local';
+  const localModeNotice = $('#local-mode-notice');
+  const guildSelect = $('#guild-select');
+  const channelSelect = $('#channel-select');
+  const joinBtn = $('#join-btn');
+  
+  if (isLocal) {
+    // Show notice and disable join controls
+    localModeNotice.classList.remove('hidden');
+    guildSelect.disabled = true;
+    channelSelect.disabled = true;
+    joinBtn.disabled = true;
+    joinBtn.style.opacity = '0.5';
+    joinBtn.style.cursor = 'not-allowed';
+  } else {
+    // Hide notice and restore normal state
+    localModeNotice.classList.add('hidden');
+    // Guild select enabled if logged in
+    const isLoggedIn = !$('#token-logout-btn').classList.contains('hidden');
+    guildSelect.disabled = !isLoggedIn;
+    // Channel/join button state managed by channel selection
+    joinBtn.style.opacity = '';
+    joinBtn.style.cursor = '';
+  }
+}
+
 async function handleOutputModeChange() {
   const oldSettings = await window.api.settingsGet();
   const oldOutputMode = oldSettings.outputMode || 'discord';
   const newOutputMode = $('#setting-output-mode').value;
   
   await autoSaveSettings();
+  
+  // Update UI state
+  updateOutputModeUI(newOutputMode);
   
   // If switched to Local Device Only, leave Discord voice
   if (oldOutputMode !== 'local' && newOutputMode === 'local') {
