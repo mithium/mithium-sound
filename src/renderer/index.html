@@ -256,6 +256,19 @@
     <button data-action="delete" class="danger-action">Delete</button>
   </div>
 
+  <!-- Modal Dialog -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div id="modal-dialog" class="modal-dialog">
+      <h3 id="modal-title"></h3>
+      <p id="modal-message" class="modal-message"></p>
+      <input type="text" id="modal-input" class="modal-input hidden">
+      <div class="modal-actions">
+        <button id="modal-cancel-btn" class="modal-btn-secondary">Cancel</button>
+        <button id="modal-confirm-btn" class="modal-btn-primary">OK</button>
+      </div>
+    </div>
+  </div>
+
   <script src="timecode.js"></script>
   <script src="app.js"></script>
 </body>
