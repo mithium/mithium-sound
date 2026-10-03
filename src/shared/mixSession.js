@@ -139,6 +139,47 @@
     return item;
   }
 
+  function deleteRange(session, trackId, startMs, endMs) {
+    var track = (session.tracks || []).find(function (item) { return item.id === trackId; });
+    if (!track) throw new Error('That track is not on screen');
+    var start = Math.round(Math.min(Number(startMs), Number(endMs)));
+    var end = Math.round(Math.max(Number(startMs), Number(endMs)));
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      throw new Error('Select a section to delete');
+    }
+    var gap = end - start;
+    var next = [];
+    (track.clips || []).forEach(function (clip) {
+      var clipStart = clip.startMs;
+      var clipEnd = clip.startMs + clip.durationMs;
+      if (clipEnd <= start) {
+        next.push(Object.assign({}, clip));
+        return;
+      }
+      if (clipStart >= end) {
+        next.push(Object.assign({}, clip, { startMs: clipStart - gap }));
+        return;
+      }
+      if (clipStart < start) {
+        next.push(Object.assign({}, clip, {
+          uid: clip.uid + '-keep-' + start,
+          durationMs: start - clipStart,
+        }));
+      }
+      if (clipEnd > end) {
+        next.push(Object.assign({}, clip, {
+          uid: clip.uid + '-after-' + end,
+          startMs: start,
+          offsetMs: (clip.offsetMs || 0) + (end - clipStart),
+          durationMs: clipEnd - end,
+        }));
+      }
+    });
+    next.sort(function (a, b) { return a.startMs - b.startMs; });
+    track.clips = next;
+    return next;
+  }
+
   function removeClip(session, trackId, uid) {
     var track = (session.tracks || []).find(function (item) { return item.id === trackId; });
     if (!track || track.kind === 'voice') return;
@@ -177,6 +218,7 @@
     setVoiceTake: setVoiceTake,
     punchVoice: punchVoice,
     placeClip: placeClip,
+    deleteRange: deleteRange,
     removeClip: removeClip,
     mixClips: mixClips,
     effectsTrack: effectsTrack,

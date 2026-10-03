@@ -135,6 +135,39 @@ function doorResult(overrides) {
     assert.strictEqual(clips[1].durationMs, 500);
   });
 
+  await test('deleting a voice section closes the gap and play uses the shortened take', () => {
+    const session = mix.createMixSession();
+    mix.setVoiceTake(session, 'take', 10000);
+    mix.placeClip(session, 'effects', { clipId: 4, name: 'Horn', startMs: 8000, durationMs: 500, uid: 'horn' });
+    mix.deleteRange(session, 'voice', 2000, 5000);
+    const voice = mix.mixClips(session, true);
+    assert.deepStrictEqual(voice.map((clip) => [clip.startMs, clip.offsetMs, clip.durationMs]), [
+      [0, 0, 2000],
+      [2000, 5000, 5000],
+    ]);
+    const mixClips = mix.mixClips(session, false);
+    assert.strictEqual(mixClips.find((clip) => clip.trackKind === 'effects').startMs, 8000);
+    assert.strictEqual(mix.sessionDurationMs(session), 8500);
+  });
+
+  await test('deleting a sound-effect section closes that track and leaves the voice', () => {
+    const session = mix.createMixSession();
+    mix.setVoiceTake(session, 'take', 10000);
+    mix.placeClip(session, 'effects', { clipId: 4, name: 'Horn', startMs: 1000, durationMs: 3000, uid: 'horn' });
+    mix.placeClip(session, 'effects', { clipId: 5, name: 'Later', startMs: 6000, durationMs: 1000, uid: 'later' });
+    mix.deleteRange(session, 'effects', 2000, 3000);
+    const effects = mix.mixClips(session, false).filter((clip) => clip.trackKind === 'effects');
+    assert.deepStrictEqual(effects.map((clip) => [clip.name, clip.startMs, clip.offsetMs, clip.durationMs]), [
+      ['Horn', 1000, 0, 1000],
+      ['Horn', 2000, 2000, 1000],
+      ['Later', 5000, 0, 1000],
+    ]);
+    const voice = mix.mixClips(session, true);
+    assert.strictEqual(voice.length, 1);
+    assert.strictEqual(voice[0].durationMs, 10000);
+    assert.throws(() => mix.deleteRange(session, 'effects', 1000, 1000), /Select a section/);
+  });
+
   await test('only two tracks show until an extra one is added, and ten is the limit', () => {
     const session = mix.createMixSession();
     assert.strictEqual(session.tracks.length, 2);

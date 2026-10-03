@@ -20,6 +20,8 @@
     let livePeaks = [];
     let playContext = null;
     let sourceSerial = 1;
+    let selection = null;
+    let drag = null;
 
     function status(text) {
       const el = $('#rec-status');
@@ -36,13 +38,13 @@
       return Math.min(1, Math.max(0, session.markerMs / duration));
     }
 
-    function voicePeaks() {
+    function trackPeaks(track) {
       const duration = mix.sessionDurationMs(session);
-      const voice = session.tracks[0];
-      if (!duration || !voice.clips.length) return livePeaks;
+      if (track.kind === 'voice' && recording) return livePeaks;
+      if (!duration || !track.clips.length) return [];
       const buckets = 180;
       const out = new Array(buckets).fill(0);
-      voice.clips.forEach(function (clip) {
+      track.clips.forEach(function (clip) {
         const src = sources.get(clip.sourceKey);
         const peaks = (src && src.peaks) || [];
         const srcDuration = (src && src.durationMs) || clip.durationMs;
@@ -51,7 +53,7 @@
         const span = Math.max(1, Math.round((clip.durationMs / duration) * buckets));
         for (let i = 0; i < span; i += 1) {
           const local = (i / span) * clip.durationMs;
-          const pos = Math.min(0.999, (clip.offsetMs + local) / srcDuration);
+          const pos = Math.min(0.999, ((clip.offsetMs || 0) + local) / srcDuration);
           const sample = peaks[Math.min(peaks.length - 1, Math.floor(pos * peaks.length))] || 0;
           const bucket = startBucket + i;
           if (bucket >= 0 && bucket < buckets) out[bucket] = Math.max(out[bucket], sample);
@@ -60,21 +62,108 @@
       return out;
     }
 
-    function redraw() {
+    function selectionRatios(trackId) {
       const duration = mix.sessionDurationMs(session);
-      waveApi.drawWaveform(wave, recording ? livePeaks : voicePeaks(), recording ? null : markerRatio());
+      if (!selection || selection.trackId !== trackId || !duration) return null;
+      return { start: selection.startMs / duration, end: selection.endMs / duration };
+    }
+
+    function paint() {
+      const duration = mix.sessionDurationMs(session);
+      waveApi.drawWaveform(
+        wave,
+        trackPeaks(session.tracks[0]),
+        recording ? null : markerRatio(),
+        selectionRatios('voice')
+      );
+      trackList.querySelectorAll('canvas[data-track-id]').forEach(function (canvas) {
+        const track = session.tracks.find(function (item) { return item.id === canvas.dataset.trackId; });
+        if (!track) return;
+        waveApi.drawWaveform(canvas, trackPeaks(track), markerRatio(), selectionRatios(track.id));
+      });
       const label = $('#rec-marker');
       if (label) {
         const clock = root.MithiumEdit ? root.MithiumEdit.formatMs(session.markerMs) : String(session.markerMs);
-        label.textContent = duration
-          ? 'Point ' + clock + '. Click the voice waveform to move it, then place a sound effect or punch in.'
-          : 'Record a voice take, then click the waveform to place a sound effect or punch in.';
+        if (selection && selection.endMs > selection.startMs) {
+          const from = root.MithiumEdit ? root.MithiumEdit.formatMs(selection.startMs) : String(selection.startMs);
+          const to = root.MithiumEdit ? root.MithiumEdit.formatMs(selection.endMs) : String(selection.endMs);
+          const track = session.tracks.find(function (item) { return item.id === selection.trackId; });
+          label.textContent = 'Selected ' + from + '–' + to + ' on ' + (track ? track.name : 'track') + '. Delete section removes it and closes the gap.';
+        } else {
+          label.textContent = duration
+            ? 'Point ' + clock + '. Click a waveform to move it. Drag across a track to select a section.'
+            : 'Record a voice take, then click the waveform to place a sound effect or punch in.';
+        }
       }
-      renderTracks();
       const saveBtn = $('#edit-render');
       if (saveBtn) saveBtn.disabled = mix.mixClips(session, false).length === 0;
       const addBtn = $('#add-track');
       if (addBtn) addBtn.disabled = session.tracks.length >= mix.MAX_TRACKS;
+      const deleteBtn = $('#delete-section');
+      if (deleteBtn) deleteBtn.disabled = !(selection && selection.endMs > selection.startMs);
+    }
+
+    function redraw() {
+      renderTracks();
+      paint();
+    }
+
+    function timeAt(canvas, event) {
+      const point = event.touches && event.touches[0] ? event.touches[0] : event;
+      const rect = canvas.getBoundingClientRect();
+      const duration = mix.sessionDurationMs(session);
+      if (!duration || !rect.width) return 0;
+      const ratio = Math.min(1, Math.max(0, (point.clientX - rect.left) / rect.width));
+      return Math.round(ratio * duration);
+    }
+
+    function bindSelect(canvas, trackId) {
+      canvas.addEventListener('pointerdown', function (event) {
+        if (recording || (event.button != null && event.button !== 0)) return;
+        if (!mix.sessionDurationMs(session)) return;
+        canvas.setPointerCapture(event.pointerId);
+        drag = {
+          trackId: trackId,
+          anchorMs: timeAt(canvas, event),
+          currentMs: timeAt(canvas, event),
+          moved: false,
+          startX: event.clientX,
+        };
+      });
+      canvas.addEventListener('pointermove', function (event) {
+        if (!drag || drag.trackId !== trackId) return;
+        if (Math.abs(event.clientX - drag.startX) > 6) drag.moved = true;
+        drag.currentMs = timeAt(canvas, event);
+        if (!drag.moved) return;
+        selection = {
+          trackId: trackId,
+          startMs: Math.min(drag.anchorMs, drag.currentMs),
+          endMs: Math.max(drag.anchorMs, drag.currentMs),
+        };
+        paint();
+      });
+      function finish(event) {
+        if (!drag || drag.trackId !== trackId) return;
+        const info = drag;
+        drag = null;
+        if (event && event.pointerId != null && canvas.hasPointerCapture && canvas.hasPointerCapture(event.pointerId)) {
+          canvas.releasePointerCapture(event.pointerId);
+        }
+        if (!info.moved) {
+          session.markerMs = info.anchorMs;
+          selection = null;
+          paint();
+          return;
+        }
+        selection = {
+          trackId: trackId,
+          startMs: Math.min(info.anchorMs, info.currentMs),
+          endMs: Math.max(info.anchorMs, info.currentMs),
+        };
+        paint();
+      }
+      canvas.addEventListener('pointerup', finish);
+      canvas.addEventListener('pointercancel', finish);
     }
 
     function renderTracks() {
@@ -87,6 +176,11 @@
         const title = document.createElement('div');
         title.className = 'mix-track-title';
         title.textContent = track.name;
+        const canvas = document.createElement('canvas');
+        canvas.className = 'wave-canvas mix-wave';
+        canvas.dataset.trackId = track.id;
+        canvas.setAttribute('aria-label', track.name + ' waveform');
+        bindSelect(canvas, track.id);
         const lane = document.createElement('div');
         lane.className = 'mix-lane';
         track.clips.forEach(function (clip) {
@@ -117,6 +211,7 @@
           list.appendChild(li);
         });
         section.appendChild(title);
+        section.appendChild(canvas);
         section.appendChild(lane);
         if (track.kind === 'extra') {
           const actions = document.createElement('div');
@@ -418,15 +513,24 @@
         button.disabled = mix.mixClips(session, false).length === 0;
       });
     });
-    wave.addEventListener('click', function (event) {
-      if (recording) return;
-      const duration = mix.sessionDurationMs(session);
-      if (!duration) return;
-      const rect = wave.getBoundingClientRect();
-      const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-      session.markerMs = Math.round(ratio * duration);
-      redraw();
-    });
+    bindSelect(wave, 'voice');
+    const deleteBtn = $('#delete-section');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', function () {
+        if (!selection || !(selection.endMs > selection.startMs)) {
+          showError('Drag across a section of a track to select it.');
+          return;
+        }
+        try {
+          mix.deleteRange(session, selection.trackId, selection.startMs, selection.endMs);
+          selection = null;
+          showError('');
+          redraw();
+        } catch (err) {
+          showError(err.message);
+        }
+      });
+    }
 
     root.mithiumStopMixPreview = function () {
       if (playContext) {

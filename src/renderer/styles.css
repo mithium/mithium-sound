@@ -1005,6 +1005,11 @@ button:disabled {
   margin-bottom: 4px;
 }
 
+.wave-canvas.mix-wave {
+  height: 72px;
+  margin-bottom: 6px;
+}
+
 .mix-lane {
   position: relative;
   height: 36px;
