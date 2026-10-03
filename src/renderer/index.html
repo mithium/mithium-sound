@@ -124,6 +124,13 @@
         <button id="ov-search" type="button">Search</button>
       </div>
       <div class="form-group">
+        <label for="ov-cap">Maximum length</label>
+        <select id="ov-cap">
+          <option value="30000" selected>30 seconds and under</option>
+          <option value="10000">10 seconds and under</option>
+        </select>
+      </div>
+      <div class="form-group">
         <label for="ov-group">Add to group</label>
         <select id="ov-group"></select>
       </div>
@@ -438,6 +445,7 @@
     </div>
   </div>
 
+  <script src="../shared/lengthCap.js"></script>
   <script src="../shared/editPlan.js"></script>
   <script src="../shared/mixSession.js"></script>
   <script src="../shared/mixEditor.js"></script>
