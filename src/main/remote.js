@@ -259,6 +259,54 @@ async function startServer(opts = {}) {
     }
   });
 
+  expressApp.post('/api/edits/scratch', authMiddleware, express.raw({ type: () => true, limit: '40mb' }), (req, res) => {
+    try {
+      const saved = studio.saveScratch(req.body, req.headers['content-type']);
+      res.status(201).json({ id: saved.id });
+    } catch (err) {
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.post('/api/edits/preview', authMiddleware, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await studio.renderMix({
+        clips: body.clips,
+        sources: body.sources,
+        save: false,
+      });
+      if (body.hearOnPhone === true) {
+        res.setHeader('Content-Type', 'audio/wav');
+        res.send(result.bytes);
+        return;
+      }
+      playFileThroughWindows(result.filePath, {});
+      res.json({ success: true, played: true });
+    } catch (err) {
+      console.error('API error (mix preview):', err);
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.post('/api/edits/mix', authMiddleware, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await studio.renderMix({
+        name: body.name,
+        groupId: body.groupId,
+        clips: body.clips,
+        sources: body.sources,
+        save: true,
+      });
+      changedLibrary();
+      res.status(201).json({ success: true, sound: result.sound });
+    } catch (err) {
+      console.error('API error (mix):', err);
+      sendApiError(res, err);
+    }
+  });
+
   expressApp.post('/api/edits', authMiddleware, async (req, res) => {
     try {
       const body = req.body || {};

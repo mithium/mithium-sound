@@ -62,7 +62,7 @@
   <section id="tab-record" class="tab-content">
     <div class="studio-block">
       <h2>Record</h2>
-      <p class="studio-help">Record with the microphone on this PC. The waveform stays after you stop. Save the take, then it plays, groups, and syncs like any other clip.</p>
+      <p class="studio-help">Record with the microphone on this PC. Click the waveform to place a sound effect or punch in. Play the voice or the mix before you save. Save mixes every track into one soundboard clip.</p>
       <div class="form-group">
         <label for="rec-device">Microphone</label>
         <div class="studio-inline">
@@ -71,55 +71,38 @@
         </div>
       </div>
       <canvas id="rec-wave" class="wave-canvas" height="140" aria-label="Recording waveform"></canvas>
-      <p id="rec-marker" class="studio-help">Click the waveform to choose an insert point.</p>
+      <p id="rec-marker" class="studio-help">Record a voice take, then click the waveform to place a sound effect or punch in.</p>
       <div class="studio-inline">
         <button id="rec-start" type="button">Record</button>
+        <button id="rec-punch" type="button">Punch in</button>
         <button id="rec-stop" type="button" disabled>Stop</button>
+        <button id="play-voice" type="button">Play voice</button>
+        <button id="play-mix" type="button">Play mix</button>
         <span id="rec-status">Ready</span>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label for="rec-name">Take name</label>
-          <input type="text" id="rec-name" placeholder="Voice take" maxlength="80">
-        </div>
-        <div class="form-group">
-          <label for="rec-group">Group</label>
-          <select id="rec-group"></select>
-        </div>
-      </div>
-      <button id="rec-save" type="button" disabled>Save take to soundboard</button>
       <p id="rec-error" class="error-text hidden"></p>
     </div>
     <div class="studio-block">
-      <h2>Insert edit</h2>
-      <p class="studio-help">One clip, plus other soundboard clips placed before it, after it, or at the marker. Render writes a new clip with the bundled FFmpeg. This is not a multi-track mix.</p>
-      <div class="form-group">
-        <label for="edit-base">Clip being edited</label>
-        <select id="edit-base"></select>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label for="edit-insert">Insert clip</label>
-          <select id="edit-insert"></select>
-        </div>
-      </div>
+      <h2>Tracks</h2>
+      <p class="studio-help">Voice and sound effects are separate until you save. Two tracks are shown. Add more only if you need them, up to 10.</p>
+      <div id="track-list"></div>
       <div class="studio-inline">
-        <button id="edit-before" type="button">Insert before</button>
-        <button id="edit-at" type="button">Insert at point</button>
-        <button id="edit-after" type="button">Insert after</button>
+        <select id="edit-insert"></select>
+        <button id="place-effect" type="button">Place at point</button>
+        <button id="delete-section" type="button" disabled>Delete section</button>
+        <button id="add-track" type="button">Add track</button>
       </div>
-      <ol id="edit-order" class="insert-list"></ol>
       <div class="form-row">
         <div class="form-group">
-          <label for="edit-name">New clip name</label>
-          <input type="text" id="edit-name" placeholder="Edited take" maxlength="80">
+          <label for="edit-name">Mix name</label>
+          <input type="text" id="edit-name" placeholder="Voice mix" maxlength="80">
         </div>
         <div class="form-group">
           <label for="edit-group">Group</label>
           <select id="edit-group"></select>
         </div>
       </div>
-      <button id="edit-render" type="button" disabled>Render new clip</button>
+      <button id="edit-render" type="button" disabled>Save mix</button>
       <p id="edit-error" class="error-text hidden"></p>
     </div>
   </section>
@@ -449,6 +432,8 @@
   </div>
 
   <script src="../shared/editPlan.js"></script>
+  <script src="../shared/mixSession.js"></script>
+  <script src="../shared/mixEditor.js"></script>
   <script src="../shared/waveform.js"></script>
   <script src="timecode.js"></script>
   <script src="studio.js"></script>

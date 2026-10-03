@@ -942,6 +942,7 @@ async function moveToGroup(soundId, groupId) {
 }
 
 async function stopAllPlayback() {
+  if (window.mithiumStopMixPreview) window.mithiumStopMixPreview();
   loadedWatch = null;
   try {
     await window.api.loadedClipHardStop();

@@ -386,67 +386,42 @@ function startDesktopStudio() {
   deviceSelect.addEventListener('change', () => {
     rememberDevice().catch((err) => console.error(err));
   });
-  $('#rec-start').addEventListener('click', () => {
-    startRecording().catch((err) => {
-      stopMeter();
-      recording = false;
-      $('#rec-start').disabled = false;
-      $('#rec-stop').disabled = true;
-      showError(errorEl, err.name === 'NotAllowedError'
-        ? 'Microphone permission was blocked.'
-        : (err.message || 'Could not start recording'));
+  if (window.MithiumMixEditor) {
+    window.MithiumMixEditor.mount({
+      $: $,
+      sounds: () => sounds(),
+      showError: (message) => showError(errorEl, message),
+      openMic: async () => {
+        await rememberDevice();
+        const deviceId = deviceSelect.value;
+        const audio = deviceId ? { deviceId: { exact: deviceId } } : true;
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio });
+          await enumerateInputs();
+          return stream;
+        } catch (err) {
+          if (!deviceId || (err.name !== 'OverconstrainedError' && err.name !== 'NotFoundError')) throw err;
+          return navigator.mediaDevices.getUserMedia({ audio: true });
+        }
+      },
+      loadClipBytes: async (id) => {
+        const audio = await window.api.soundRead(id);
+        return audio.bytes.buffer.slice(audio.bytes.byteOffset, audio.bytes.byteOffset + audio.bytes.byteLength);
+      },
+      probeDuration: async (id) => (await window.api.clipProbe(id)).durationMs,
+      groupId: () => ($('#edit-group').value ? Number($('#edit-group').value) : null),
+      preferLocalPreview: () => true,
+      prepareContext: async (ctx) => {
+        const settings = await window.api.settingsGet();
+        if (settings.selectedDeviceId && settings.selectedDeviceId !== 'default' && ctx.setSinkId) {
+          try { await ctx.setSinkId(settings.selectedDeviceId); } catch (err) { console.error(err); }
+        }
+      },
+      saveMix: async (payload) => (await window.api.clipMix(payload)).sound,
+      onSaved: async () => { if (window.mithiumRefresh) await window.mithiumRefresh(); },
+      playThroughWindows: async () => {},
     });
-  });
-  $('#rec-stop').addEventListener('click', () => {
-    stopRecording().catch((err) => showError(errorEl, err.message));
-  });
-  $('#rec-save').addEventListener('click', () => {
-    saveTake().catch((err) => showError(errorEl, err.message));
-  });
-  wave.addEventListener('click', (event) => {
-    if (recording) return;
-    const rect = wave.getBoundingClientRect();
-    markerRatio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    redraw();
-  });
-  $('#edit-base').addEventListener('change', () => {
-    const id = $('#edit-base').value;
-    loadBase(id, { keepInserts: false }).catch((err) => showError(editError, err.message));
-  });
-  $('#edit-before').addEventListener('click', () => addInsert('before'));
-  $('#edit-at').addEventListener('click', () => addInsert('at'));
-  $('#edit-after').addEventListener('click', () => addInsert('after'));
-  $('#edit-render').addEventListener('click', async () => {
-    try {
-      showError(editError, '');
-      if (!baseId && unsavedTake) {
-        const saved = await saveTake({ keepInserts: true });
-        if (!saved) return;
-      }
-      if (!baseId) {
-        showError(editError, 'Save the take or choose a clip first.');
-        return;
-      }
-      $('#edit-render').disabled = true;
-      const sound = await window.api.clipRender({
-        name: $('#edit-name').value.trim() || `${nameOf(baseId)} edit`,
-        groupId: $('#edit-group').value || null,
-        baseId: Number(baseId),
-        inserts: inserts.map((item) => ({
-          clipId: item.clipId,
-          placement: item.placement,
-          atMs: item.atMs,
-        })),
-      });
-      inserts = [];
-      if (window.mithiumRefresh) await window.mithiumRefresh();
-      statusEl.textContent = `Rendered “${sound.name}”`;
-      await loadBase(sound.id, { keepInserts: false });
-    } catch (err) {
-      showError(editError, err.message || 'Render failed');
-      renderOrder();
-    }
-  });
+  }
 
   let ovPage = 1;
   let ovPageCount = 1;
@@ -555,19 +530,15 @@ function startDesktopStudio() {
   window.mithiumEditClip = (id) => {
     const tab = document.querySelector('.tab[data-tab="record"]');
     if (tab) tab.click();
-    loadBase(id, { keepInserts: false });
+    if (window.mithiumLoadVoice) window.mithiumLoadVoice(id);
   };
   window.mithiumStudioRefresh = () => {
-    fillGroups($('#rec-group'));
     fillGroups($('#edit-group'));
     fillGroups($('#ov-group'));
-    fillClipSelect($('#edit-base'), true);
-    fillClipSelect($('#edit-insert'), true);
-    if (baseId) $('#edit-base').value = String(baseId);
-    renderOrder();
+    if (window.mithiumMixRefresh) window.mithiumMixRefresh();
   };
 
-  redraw();
+  if (!window.MithiumMixEditor) redraw();
   enumerateInputs().catch((err) => showError(errorEl, err.message));
   window.mithiumStudioRefresh();
 }

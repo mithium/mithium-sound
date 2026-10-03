@@ -9,6 +9,7 @@ const path = require('path');
 const https = require('https');
 const { spawnSync } = require('child_process');
 const edit = require('../src/shared/editPlan');
+const mix = require('../src/shared/mixSession');
 const playback = require('../src/shared/playbackTarget');
 const clipEdit = require('../src/main/clipEdit');
 const openverse = require('../src/main/openverse');
@@ -87,6 +88,108 @@ function doorResult(overrides) {
     assert.strictEqual(playback.playbackTarget(undefined), 'windows');
     assert.strictEqual(playback.playbackTarget(null), 'windows');
     assert.strictEqual(playback.playbackTarget(true), 'phone');
+  });
+
+  await test('a sound effect stays on its own track at the clicked point', () => {
+    const session = mix.createMixSession();
+    assert.strictEqual(session.tracks.length, 2);
+    assert.deepStrictEqual(session.tracks.map((track) => track.name), ['Voice', 'Sound effects']);
+    mix.setVoiceTake(session, 'take', 10000);
+    const placed = mix.placeClip(session, 'effects', {
+      clipId: 3,
+      name: 'Boom',
+      startMs: 4000,
+      durationMs: 500,
+    });
+    const voice = mix.mixClips(session, true);
+    const all = mix.mixClips(session, false);
+    assert.strictEqual(voice.length, 1);
+    assert.strictEqual(voice[0].sourceKey, 'take');
+    assert.strictEqual(voice[0].durationMs, 10000);
+    assert.strictEqual(all.length, 2);
+    assert.strictEqual(placed.startMs, 4000);
+    assert.strictEqual(all[1].trackKind, 'effects');
+    assert.strictEqual(all[1].startMs, 4000);
+    assert.notStrictEqual(all[1].trackId, all[0].trackId);
+  });
+
+  await test('punch-in keeps the voice before the point and the tail after the new take', () => {
+    const session = mix.createMixSession();
+    mix.setVoiceTake(session, 'take', 1000);
+    const clips = mix.punchVoice(session, 400, 'punch-1', 300);
+    assert.deepStrictEqual(clips.map((clip) => [clip.sourceKey, clip.startMs, clip.offsetMs, clip.durationMs]), [
+      ['take', 0, 0, 400],
+      ['punch-1', 400, 0, 300],
+      ['take', 700, 700, 300],
+    ]);
+  });
+
+  await test('punch-in can extend the voice past the old ending', () => {
+    const session = mix.createMixSession();
+    mix.setVoiceTake(session, 'take', 1000);
+    mix.punchVoice(session, 800, 'punch-1', 500);
+    assert.strictEqual(mix.sessionDurationMs(session), 1300);
+    const clips = mix.mixClips(session, true);
+    assert.strictEqual(clips[0].durationMs, 800);
+    assert.strictEqual(clips[1].startMs, 800);
+    assert.strictEqual(clips[1].durationMs, 500);
+  });
+
+  await test('deleting a voice section closes the gap and play uses the shortened take', () => {
+    const session = mix.createMixSession();
+    mix.setVoiceTake(session, 'take', 10000);
+    mix.placeClip(session, 'effects', { clipId: 4, name: 'Horn', startMs: 8000, durationMs: 500, uid: 'horn' });
+    mix.deleteRange(session, 'voice', 2000, 5000);
+    const voice = mix.mixClips(session, true);
+    assert.deepStrictEqual(voice.map((clip) => [clip.startMs, clip.offsetMs, clip.durationMs]), [
+      [0, 0, 2000],
+      [2000, 5000, 5000],
+    ]);
+    const mixClips = mix.mixClips(session, false);
+    assert.strictEqual(mixClips.find((clip) => clip.trackKind === 'effects').startMs, 8000);
+    assert.strictEqual(mix.sessionDurationMs(session), 8500);
+  });
+
+  await test('deleting a sound-effect section closes that track and leaves the voice', () => {
+    const session = mix.createMixSession();
+    mix.setVoiceTake(session, 'take', 10000);
+    mix.placeClip(session, 'effects', { clipId: 4, name: 'Horn', startMs: 1000, durationMs: 3000, uid: 'horn' });
+    mix.placeClip(session, 'effects', { clipId: 5, name: 'Later', startMs: 6000, durationMs: 1000, uid: 'later' });
+    mix.deleteRange(session, 'effects', 2000, 3000);
+    const effects = mix.mixClips(session, false).filter((clip) => clip.trackKind === 'effects');
+    assert.deepStrictEqual(effects.map((clip) => [clip.name, clip.startMs, clip.offsetMs, clip.durationMs]), [
+      ['Horn', 1000, 0, 1000],
+      ['Horn', 2000, 2000, 1000],
+      ['Later', 5000, 0, 1000],
+    ]);
+    const voice = mix.mixClips(session, true);
+    assert.strictEqual(voice.length, 1);
+    assert.strictEqual(voice[0].durationMs, 10000);
+    assert.throws(() => mix.deleteRange(session, 'effects', 1000, 1000), /Select a section/);
+  });
+
+  await test('only two tracks show until an extra one is added, and ten is the limit', () => {
+    const session = mix.createMixSession();
+    assert.strictEqual(session.tracks.length, 2);
+    for (let i = 0; i < 8; i += 1) mix.addExtraTrack(session);
+    assert.strictEqual(session.tracks.length, 10);
+    assert.throws(() => mix.addExtraTrack(session), /Ten tracks/);
+    assert.throws(() => mix.placeClip(session, 'voice', { clipId: 1, startMs: 0, durationMs: 10 }), /own track/);
+  });
+
+  await test('mix filter lays the effect over the voice instead of splicing it in', () => {
+    const session = mix.createMixSession();
+    mix.setVoiceTake(session, 'take', 1000);
+    mix.placeClip(session, 'effects', { clipId: 9, name: 'Boom', startMs: 400, durationMs: 250, uid: 'fx' });
+    const plan = clipEdit.buildMixPlan(mix.mixClips(session, false), {
+      take: '/sounds/voice.wav',
+      'clip:9': '/sounds/boom.wav',
+    });
+    assert.deepStrictEqual(plan.inputOrder, ['take', 'clip:9']);
+    assert.ok(plan.filter.includes('atrim=start=0.000:end=1.000'));
+    assert.ok(plan.filter.includes('adelay=400|400'));
+    assert.ok(plan.filter.includes('amix=inputs=2'));
+    assert.ok(!plan.filter.includes('concat='));
   });
 
   await test('before, middle, and after stay in that order', () => {
@@ -215,6 +318,27 @@ function doorResult(overrides) {
       });
       const duration = await clipEdit.probeDurationMs(ffmpegPath, output);
       assert.ok(Math.abs(duration - 2000) < 80, `expected about 2000ms, got ${duration}`);
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    await test('ffmpeg mix keeps a sound effect on top of the voice', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mithium-mix-'));
+      const voice = path.join(dir, 'voice.wav');
+      const effect = path.join(dir, 'effect.wav');
+      const output = path.join(dir, 'out.wav');
+      fs.writeFileSync(voice, pcmWav(1.0, 440));
+      fs.writeFileSync(effect, pcmWav(0.5, 880));
+      const session = mix.createMixSession();
+      mix.setVoiceTake(session, 'take', 1000);
+      mix.placeClip(session, 'effects', { clipId: 2, name: 'Boom', startMs: 800, durationMs: 500, uid: 'fx' });
+      await clipEdit.renderMix({
+        ffmpegPath,
+        clips: mix.mixClips(session, false),
+        filesBySource: { take: voice, 'clip:2': effect },
+        outputPath: output,
+      });
+      const duration = await clipEdit.probeDurationMs(ffmpegPath, output);
+      assert.ok(Math.abs(duration - 1300) < 80, `expected about 1300ms, got ${duration}`);
       fs.rmSync(dir, { recursive: true, force: true });
     });
   }

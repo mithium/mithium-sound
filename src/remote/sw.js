@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mithium-sound-remote-v4';
+const CACHE_NAME = 'mithium-sound-remote-v5';
 const urlsToCache = [
   '/',
   '/index.html',
@@ -6,6 +6,8 @@ const urlsToCache = [
   '/app.js',
   '/studio.js',
   '/shared/playbackTarget.js',
+  '/shared/mixSession.js',
+  '/shared/mixEditor.js',
   '/shared/editPlan.js',
   '/shared/waveform.js',
   '/manifest.json',

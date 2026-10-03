@@ -12,7 +12,7 @@
     if (canvas.height !== height) canvas.height = height;
   }
 
-  function drawWaveform(canvas, peaks, markerRatio) {
+  function drawWaveform(canvas, peaks, markerRatio, selection) {
     fitCanvas(canvas);
     const ctx = canvas.getContext('2d');
     const width = canvas.width;
@@ -36,6 +36,13 @@
       const bar = Math.max(1, amp * (height - 8));
       const x = i * slot;
       ctx.fillRect(x, mid - bar / 2, Math.max(1, slot - 1), bar);
+    }
+
+    if (selection && Number.isFinite(Number(selection.start)) && Number.isFinite(Number(selection.end))) {
+      const from = Math.max(0, Math.min(1, Math.min(Number(selection.start), Number(selection.end))));
+      const to = Math.max(0, Math.min(1, Math.max(Number(selection.start), Number(selection.end))));
+      ctx.fillStyle = 'rgba(243, 139, 168, 0.35)';
+      ctx.fillRect(from * width, 0, Math.max(2, (to - from) * width), height);
     }
 
     if (markerRatio != null && Number.isFinite(Number(markerRatio))) {
