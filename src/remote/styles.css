@@ -574,6 +574,19 @@ body {
   font-size: 13px;
   font-weight: 700;
   margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.delete-section-btn {
+  display: block;
+  width: 100%;
+  margin: 8px 0 12px;
+  background: var(--danger);
+  color: #1e1e2e;
+  font-weight: 700;
 }
 
 .wave-canvas.mix-wave {

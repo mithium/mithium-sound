@@ -336,6 +336,10 @@
         body: JSON.stringify(payload),
       })).sound,
       onSaved: () => {},
+      leaveEditor: () => {
+        const tab = document.querySelector('.remote-tab[data-panel="board"]');
+        if (tab) tab.click();
+      },
     });
   }
 

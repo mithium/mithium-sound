@@ -65,7 +65,12 @@
 
   <section id="record-panel" class="remote-panel hidden">
     <p class="studio-help">Record with this phone’s microphone. Tap the waveform to place a sound effect or punch in. Play voice or the mix before you save. Off “Hear on this phone”, playback goes to the Windows PC. Save mixes every track into one clip on the PC.</p>
+    <div id="voice-track-bar" class="mix-track-title voice-track-bar">
+      <span>Voice</span>
+      <button id="delete-voice-track" type="button">Delete track</button>
+    </div>
     <canvas id="rec-wave" class="wave-canvas" height="140" aria-label="Recording waveform"></canvas>
+    <button id="delete-section" type="button" class="delete-section-btn hidden">Delete section</button>
     <p id="rec-marker" class="studio-help">Record a voice take, then tap the waveform to place a sound effect or punch in.</p>
     <div class="studio-inline">
       <button id="rec-start" type="button">Record</button>
@@ -83,8 +88,10 @@
     <select id="edit-insert"></select>
     <div class="studio-inline">
       <button id="place-effect" type="button">Place at point</button>
-      <button id="delete-section" type="button" disabled>Delete section</button>
       <button id="add-track" type="button">Add track</button>
+      <button id="edit-undo" type="button" disabled>Undo</button>
+      <button id="edit-redo" type="button" disabled>Redo</button>
+      <button id="edit-cancel" type="button">Cancel</button>
     </div>
     <label class="field-label" for="edit-name">Mix name</label>
     <input type="text" id="edit-name" placeholder="Voice mix" maxlength="80">

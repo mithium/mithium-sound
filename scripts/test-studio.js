@@ -168,6 +168,49 @@ function doorResult(overrides) {
     assert.throws(() => mix.deleteRange(session, 'effects', 1000, 1000), /Select a section/);
   });
 
+  await test('delete track removes voice or effects without touching the other', () => {
+    const session = mix.createMixSession();
+    mix.setVoiceTake(session, 'take', 4000);
+    mix.placeClip(session, 'effects', { clipId: 4, name: 'Horn', startMs: 500, durationMs: 400, uid: 'horn' });
+    mix.removeTrack(session, 'effects');
+    assert.strictEqual(mix.effectsTrack(session), null);
+    assert.strictEqual(mix.mixClips(session, true).length, 1);
+    mix.removeTrack(session, 'voice');
+    assert.strictEqual(mix.voiceTrack(session), null);
+    assert.strictEqual(mix.mixClips(session, false).length, 0);
+    mix.setVoiceTake(session, 'take', 1000);
+    assert.strictEqual(mix.voiceTrack(session).clips[0].durationMs, 1000);
+  });
+
+  await test('undo keeps ten steps and redo restores a deleted section', () => {
+    const session = mix.createMixSession();
+    const history = mix.createEditHistory(10);
+    mix.setVoiceTake(session, 'take', 10000);
+    for (let i = 0; i < 11; i += 1) {
+      history.note(session);
+      mix.placeClip(session, 'effects', {
+        clipId: i + 1,
+        name: 'Fx' + i,
+        startMs: i * 100,
+        durationMs: 50,
+        uid: 'fx-' + i,
+      });
+    }
+    assert.strictEqual(history.canUndo(), true);
+    let undos = 0;
+    while (history.undo(session)) undos += 1;
+    assert.strictEqual(undos, 10);
+    assert.strictEqual(history.canUndo(), false);
+    const afterUndo = mix.mixClips(session, false).filter((clip) => clip.trackKind === 'effects').length;
+    assert.strictEqual(history.redo(session), true);
+    const afterRedo = mix.mixClips(session, false).filter((clip) => clip.trackKind === 'effects').length;
+    assert.strictEqual(afterRedo, afterUndo + 1);
+    history.note(session);
+    mix.deleteRange(session, 'voice', 0, 1000);
+    assert.strictEqual(history.undo(session), true);
+    assert.strictEqual(mix.mixClips(session, true)[0].durationMs, 10000);
+  });
+
   await test('only two tracks show until an extra one is added, and ten is the limit', () => {
     const session = mix.createMixSession();
     assert.strictEqual(session.tracks.length, 2);
