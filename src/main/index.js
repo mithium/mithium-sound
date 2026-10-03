@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage, ses
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
-const { GlobalKeyboardListener } = require('node-global-key-listener');
+const { createGlobalKeyListener, decideGlobalHotkey, globalHotkeyAction, planQuit } = require('./globalHotkeys');
 
 // Setup FFmpeg for prism-media / @discordjs/voice
 // ffmpeg-static checks process.env.FFMPEG_BIN, so set it before requiring anything
@@ -64,7 +64,6 @@ const homeserver = require('./homeserver');
 const loadedClip = require('./loadedClip');
 const studio = require('./studioRoutes');
 const { createWinKeyHold } = require('./winKeyHold');
-const { classifyGlobalEvent } = require('./loadedClipControl');
 
 let mainWindow = null;
 let tray = null;
@@ -158,7 +157,7 @@ function createWindow() {
 
   mainWindow.on('close', (event) => {
     if (app.isQuitting) return;
-    // Keep the process alive so global V/T and Delete hooks still run.
+    // Keep the process alive so global V/T and Delete hotkeys still run.
     event.preventDefault();
     mainWindow.hide();
   });
@@ -333,57 +332,56 @@ function createTray() {
 
 function registerGlobalShortcuts() {
   if (keyboardListener) return;
-  
+  if (process.platform !== 'win32') {
+    console.log('Global hotkeys are only armed on Windows');
+    return;
+  }
+
   try {
-    keyboardListener = new GlobalKeyboardListener();
-    
-    // Same low-level hook used since global V/T/Delete (v1.8.10+).
-    // It receives keys while the window is hidden, minimized, or unfocused
-    // (including a fullscreen game). The hook dies if the process is quit;
-    // closing the window hides to the tray instead.
-    // Mouse buttons are not bound. Hard stop is Delete, the Windows Stop
+    // Polls GetAsyncKeyState via signed powershell.exe. Works while this
+    // window is hidden, minimized, or unfocused, including a fullscreen game.
+    // Closing the window hides to the tray. Quit kills the poller.
+    // Mouse buttons are not watched. Hard stop is Delete, the Windows Stop
     // button, or Stop on the phone remote.
+    keyboardListener = createGlobalKeyListener();
     keyboardListener.addListener((e, down) => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
-
-      const classified = classifyGlobalEvent(e);
-      if (!classified || classified.kind !== 'key') return;
-
-      const modified = down['LEFT ALT'] || down['RIGHT ALT'] ||
-        down['LEFT CTRL'] || down['RIGHT CTRL'] ||
-        down['LEFT SHIFT'] || down['RIGHT SHIFT'];
-      if (modified) return;
+      const service = loadedClip.getService();
+      const state = service ? service.publicState() : null;
+      const classified = decideGlobalHotkey(e, down, {
+        focused: mainWindow.isFocused(),
+        playbackActive: !!(state && state.playbackActive),
+        simulating: state ? state.simulating : null,
+      });
+      const action = globalHotkeyAction(classified);
+      if (!action) return;
 
       // Focused window: renderer handles V/T/Delete so text fields still work.
-      // Unfocused / tray: this hook is the only path for those keys.
-      if (mainWindow.isFocused()) return;
-
-      if (classified.down) {
-        if (classified.key === 'Delete') {
-          performHardStop({ notifyRenderer: true });
-          return;
-        }
-        dispatchLoadedKeyDown(classified.key, { fromRenderer: false });
-      } else if (classified.key !== 'Delete') {
-        dispatchLoadedKeyUp(classified.key, { fromRenderer: false });
+      // Unfocused / tray: this listener is the only path for those keys.
+      if (action.type === 'hard-stop') {
+        performHardStop({ notifyRenderer: true });
+        return;
       }
+      if (action.type === 'keydown') {
+        dispatchLoadedKeyDown(action.key, { fromRenderer: false });
+        return;
+      }
+      dispatchLoadedKeyUp(action.key, { fromRenderer: false });
     });
-    
-    console.log('Global keyboard listener started for V, T, and Delete');
   } catch (err) {
-    console.error('Failed to start global keyboard listener:', err);
+    console.error('Failed to start global hotkeys:', err);
   }
 }
 
 function unregisterGlobalShortcuts() {
   if (!keyboardListener) return;
-  
+
   try {
     keyboardListener.kill();
     keyboardListener = null;
-    console.log('Global keyboard listener stopped');
+    console.log('Global hotkeys released');
   } catch (err) {
-    console.error('Failed to stop global keyboard listener:', err);
+    console.error('Failed to release global hotkeys:', err);
   }
 }
 
@@ -433,9 +431,17 @@ app.whenReady().then(async () => {
 let quitReleaseStarted = false;
 app.on('before-quit', (event) => {
   app.isQuitting = true;
-  if (quitReleaseStarted) return;
   const service = loadedClip.getService();
-  if (!service || !service.publicState().simulating) return;
+  const simulating = !!(service && service.publicState().simulating);
+  const plan = planQuit({ quitReleaseStarted, simulating });
+  // Tray → Quit always stops the poller, including when we briefly delay
+  // exit to release a simulated V or T. Key-up injection stays on that
+  // delay path so a normal quit does not tap V or T.
+  unregisterGlobalShortcuts();
+  if (!plan.delayForRelease) {
+    if (keyHold) keyHold.close();
+    return;
+  }
   event.preventDefault();
   quitReleaseStarted = true;
   const release = service.shutdown().catch((err) => {
