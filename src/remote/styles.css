@@ -503,6 +503,21 @@ body {
   border-bottom-color: var(--accent);
 }
 
+.hear-bar {
+  padding: 10px 16px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.hear-bar .loaded-hint {
+  margin-top: 6px;
+}
+
+#phone-player {
+  width: 100%;
+  margin-top: 8px;
+}
+
 .remote-panel {
   padding: 16px;
 }

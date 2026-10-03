@@ -9,6 +9,8 @@ let loadedClipId = null;
 let loadedClipName = null;
 let autoHold = true;
 let simulating = null;
+let hearOnPhone = false;
+let phoneObjectUrl = null;
 
 // DOM elements
 const soundGrid = document.getElementById('sound-grid');
@@ -324,17 +326,61 @@ function toggleGroup(groupId) {
   }
 }
 
-// Play sound via API
+function playbackTarget() {
+  const decide = window.MithiumPlayback && window.MithiumPlayback.playbackTarget;
+  return decide ? decide(hearOnPhone) : (hearOnPhone === true ? 'phone' : 'windows');
+}
+
+function stopPhonePlayback() {
+  const player = document.getElementById('phone-player');
+  if (player) {
+    player.pause();
+    player.classList.add('hidden');
+    player.removeAttribute('src');
+    try { player.load(); } catch { /* already reset */ }
+  }
+  if (phoneObjectUrl) {
+    URL.revokeObjectURL(phoneObjectUrl);
+    phoneObjectUrl = null;
+  }
+}
+
+async function playOnPhone(blob) {
+  const player = document.getElementById('phone-player');
+  if (!player) throw new Error('This phone cannot play audio');
+  stopPhonePlayback();
+  phoneObjectUrl = URL.createObjectURL(blob);
+  player.src = phoneObjectUrl;
+  player.classList.remove('hidden');
+  await player.play();
+}
+
+function applyHearOnPhone(enabled) {
+  hearOnPhone = enabled === true;
+  const box = document.getElementById('hear-on-phone');
+  if (box) box.checked = hearOnPhone;
+  if (playbackTarget() !== 'phone') stopPhonePlayback();
+}
+
+// Play sound via the Windows app, unless auditioning on this phone.
 async function playSound(id) {
   try {
-    const headers = {
-      'Content-Type': 'application/json',
-    };
-    if (authToken) headers['X-Auth-Token'] = authToken;
-    
+    if (playbackTarget() === 'phone') {
+      const response = await fetch(`${API_BASE}/api/sounds/${id}/audio`, { headers: authHeaders() });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || 'Failed to load that clip');
+      }
+      await playOnPhone(await response.blob());
+      playingId = id;
+      updatePlayingState();
+      return;
+    }
+
+    stopPhonePlayback();
     const response = await fetch(`${API_BASE}/api/play/${id}`, {
       method: 'POST',
-      headers,
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
     });
     
     if (!response.ok) {
@@ -352,6 +398,7 @@ async function playSound(id) {
 
 // Stop playback via API
 async function stopPlayback() {
+  stopPhonePlayback();
   try {
     const headers = {
       'Content-Type': 'application/json',
@@ -472,6 +519,7 @@ function handleWebSocketMessage(message) {
       volumeValue.textContent = `${volume}%`;
       renderSoundGrid();
       applyLoadedState(data);
+      if (typeof data.hearOnPhone === 'boolean') applyHearOnPhone(data.hearOnPhone);
       break;
       
     case 'library':
@@ -499,6 +547,10 @@ function handleWebSocketMessage(message) {
       updatePlayingState();
       break;
       
+    case 'hear-on-phone':
+      applyHearOnPhone(data && data.enabled === true);
+      break;
+
     case 'volume':
       // Volume changed
       volume = data.volume;
@@ -538,6 +590,18 @@ autoHoldToggle.addEventListener('change', () => {
   setAutoHold(autoHoldToggle.checked);
 });
 
+const hearOnPhoneToggle = document.getElementById('hear-on-phone');
+hearOnPhoneToggle.addEventListener('change', async () => {
+  const enabled = hearOnPhoneToggle.checked;
+  try {
+    await postJson('/api/hear-on-phone', { enabled });
+    applyHearOnPhone(enabled);
+  } catch (err) {
+    hearOnPhoneToggle.checked = hearOnPhone === true;
+    showError(err.message);
+  }
+});
+
 // Initialize
 async function init() {
   // Fetch initial library
@@ -557,11 +621,16 @@ async function init() {
       volumeSlider.value = volume;
       volumeValue.textContent = `${volume}%`;
       applyLoadedState(status);
+      applyHearOnPhone(status.hearOnPhone === true);
     }
   } catch (err) {
     console.error('Failed to fetch status:', err);
   }
 }
+
+window.mithiumHearOnPhone = () => playbackTarget() === 'phone';
+window.mithiumPlayOnPhone = playOnPhone;
+window.mithiumStopPhonePlayback = stopPhonePlayback;
 
 window.mithiumRemoteState = () => ({ sounds, groups, showError, authHeaders, authToken });
 

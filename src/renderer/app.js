@@ -1843,6 +1843,20 @@ window.api.onLoadedClipForceStop(() => {
   stopAllPlayback();
 });
 
+window.api.onRemotePlayLocal(async (data) => {
+  if (!data || !data.filePath) return;
+  try {
+    const settings = await window.api.settingsGet();
+    await playLocalAudio(data.filePath, data.volume == null ? 1 : data.volume, settings.selectedDeviceId);
+    if (data.id != null) {
+      playingId = data.id;
+      renderSoundGrid();
+    }
+  } catch (err) {
+    console.error('Remote local playback failed:', err);
+  }
+});
+
 window.api.loadedClipGetState().then((state) => {
   applyLoadedClipState(state);
 }).catch((err) => {

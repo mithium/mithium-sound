@@ -118,4 +118,7 @@ contextBridge.exposeInMainWorld('api', {
   onHomeServerStatus: (cb) => {
     ipcRenderer.on('homeserver:status', (_e, state) => cb(state));
   },
+  onRemotePlayLocal: (cb) => {
+    ipcRenderer.on('remote:play-local', (_e, data) => cb(data));
+  },
 });

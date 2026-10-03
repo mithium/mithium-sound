@@ -2,6 +2,7 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
 const https = require('https');
+const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const QRCode = require('qrcode');
@@ -10,6 +11,7 @@ const settings = require('./settings');
 const loadedClip = require('./loadedClip');
 const studio = require('./studioRoutes');
 const remoteCert = require('./remoteCert');
+const openverse = require('./openverse');
 
 let httpServer = null;
 let httpsServer = null;
@@ -21,6 +23,7 @@ let port = 3000;
 let securePort = null;
 let authToken = null;
 let onLibraryChange = null;
+let onPlayLocal = null;
 
 // Get all LAN IP addresses
 function getLanIPs() {
@@ -81,6 +84,7 @@ async function startServer(opts = {}) {
   port = opts.port || 3000;
   authToken = opts.authToken || null;
   onLibraryChange = opts.onLibraryChange || null;
+  onPlayLocal = opts.onPlayLocal || null;
   securePort = null;
   
   expressApp = express();
@@ -115,19 +119,7 @@ async function startServer(opts = {}) {
       }
       
       const filePath = soundboard.getFilePath(sound.filename);
-      const vol = (settings.get('volume') || 100) / 100;
-      const outputMode = settings.get('outputMode') || 'discord';
-      
-      // Play through the bot module (imported in index.js will handle this)
-      // We'll emit an event that the main process can handle
-      const bot = require('./bot');
-      
-      if (outputMode === 'discord' || outputMode === 'both') {
-        bot.playSound(filePath, vol);
-      }
-      
-      // Broadcast to all clients that this sound is now playing
-      broadcastUpdate('playing', { id });
+      playFileThroughWindows(filePath, { id });
       
       res.json({ success: true, id, name: sound.name });
     } catch (err) {
@@ -182,6 +174,7 @@ async function startServer(opts = {}) {
         volume,
         serverVersion: require('../../package.json').version,
         secureUrls: securePort ? getSecureURLs() : [],
+        hearOnPhone: settings.get('remoteHearOnPhone') === true,
         ...loadedClip.getPublicState(),
       });
     } catch (err) {
@@ -301,6 +294,36 @@ async function startServer(opts = {}) {
     }
   });
 
+  // Same Windows play path as a soundboard clip. The phone does not play this response.
+  expressApp.post('/api/openverse/preview/:id/play', authMiddleware, async (req, res) => {
+    try {
+      const preview = await studio.previewOpenverse(req.params.id);
+      const ext = openverse.extensionFor(preview.mime, '');
+      const filePath = path.join(os.tmpdir(), `mithium-sound-openverse-preview${ext}`);
+      fs.writeFileSync(filePath, preview.bytes);
+      playFileThroughWindows(filePath, {});
+      res.json({ success: true, title: preview.result.title });
+    } catch (err) {
+      console.error('API error (openverse preview play):', err);
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.post('/api/hear-on-phone', authMiddleware, (req, res) => {
+    try {
+      const enabled = req.body ? req.body.enabled : undefined;
+      if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ error: 'Expected { enabled: boolean }' });
+      }
+      settings.set('remoteHearOnPhone', enabled);
+      broadcastUpdate('hear-on-phone', { enabled });
+      res.json({ success: true, enabled });
+    } catch (err) {
+      console.error('API error (hear-on-phone):', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   expressApp.post('/api/openverse/import', authMiddleware, async (req, res) => {
     try {
       const body = req.body || {};
@@ -361,7 +384,14 @@ function attachSockets(server) {
       const clip = loadedClip.getPublicState();
       ws.send(JSON.stringify({
         type: 'init',
-        data: { sounds, groups, volume, secureUrls: securePort ? getSecureURLs() : [], ...clip },
+        data: {
+          sounds,
+          groups,
+          volume,
+          secureUrls: securePort ? getSecureURLs() : [],
+          hearOnPhone: settings.get('remoteHearOnPhone') === true,
+          ...clip,
+        },
       }));
     } catch (err) {
       console.error('WebSocket init error:', err);
@@ -440,6 +470,26 @@ function getStatus() {
     secureUrls: isRunning && securePort ? getSecureURLs() : [],
     hasAuth: !!authToken,
   };
+}
+
+function playFileThroughWindows(filePath, info) {
+  const vol = (settings.get('volume') || 100) / 100;
+  const outputMode = settings.get('outputMode') || 'discord';
+  // Same Discord gate as a click on the Windows soundboard. Local device
+  // playback is the other half of that click, so the phone can drive it too.
+  if (outputMode === 'discord' || outputMode === 'both') {
+    const bot = require('./bot');
+    bot.playSound(filePath, vol);
+  }
+  if ((outputMode === 'local' || outputMode === 'both') && typeof onPlayLocal === 'function') {
+    onPlayLocal({
+      filePath,
+      volume: vol,
+      id: info && info.id != null ? info.id : null,
+    });
+  }
+  const id = info && info.id != null ? info.id : null;
+  broadcastUpdate('playing', { id });
 }
 
 function getSecureURLs() {

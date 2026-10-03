@@ -746,6 +746,11 @@ ipcMain.handle('remote:start', async (_e, opts) => {
     await remote.startServer({
       ...(opts || {}),
       onLibraryChange: () => libraryMutated(),
+      onPlayLocal: (data) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('remote:play-local', data);
+        }
+      },
     });
     return { success: true, ...remote.getStatus() };
   } catch (err) {
