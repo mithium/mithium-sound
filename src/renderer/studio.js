@@ -431,6 +431,40 @@ function startDesktopStudio() {
   let ovPageCount = 1;
   let ovAudioUrl = null;
   let ovPlayer = null;
+  let ovResults = [];
+  let ovSearched = false;
+
+  function lengthCapMs() {
+    const caps = window.MithiumLengthCap;
+    return caps ? caps.capMs($('#ov-cap').value) : 30000;
+  }
+
+  function lengthCapLabel() {
+    return lengthCapMs() === 10000 ? '10 seconds and under' : '30 seconds and under';
+  }
+
+  function resultsForCap(results) {
+    const caps = window.MithiumLengthCap;
+    const cap = lengthCapMs();
+    return (results || []).filter((result) => (caps ? caps.matches(result.durationMs, cap) : true));
+  }
+
+  function showCappedResults() {
+    const visible = resultsForCap(ovResults);
+    const label = lengthCapLabel();
+    if (visible.length) {
+      $('#ov-note').textContent = label;
+    } else if (ovResults.length) {
+      $('#ov-note').textContent = ovPage < ovPageCount
+        ? `Nothing on this page is ${label}.`
+        : `No results are ${label}.`;
+    } else {
+      $('#ov-note').textContent = ovPage < ovPageCount
+        ? 'No short sound effects on this page.'
+        : 'No short sound effects.';
+    }
+    renderOpenverse(visible);
+  }
 
   function previewPlayer() {
     if (!ovPlayer) {
@@ -462,15 +496,15 @@ function startDesktopStudio() {
       const data = await window.api.openverseSearch($('#ov-query').value.trim(), page);
       ovPage = data.page || page;
       ovPageCount = data.pageCount || 1;
-      const count = data.results && data.results.length;
-      $('#ov-note').textContent = count
-        ? 'Short sound effects'
-        : (ovPage < ovPageCount ? 'No short sound effects on this page.' : 'No short sound effects.');
-      renderOpenverse(data.results || []);
+      ovSearched = true;
+      ovResults = data.results || [];
+      showCappedResults();
       $('#ov-prev').classList.toggle('hidden', ovPage <= 1);
       $('#ov-next').classList.toggle('hidden', ovPage >= ovPageCount);
     } catch (err) {
       $('#ov-note').textContent = '';
+      ovSearched = true;
+      ovResults = [];
       showError($('#ov-error'), err.message || 'Openverse is unreachable. Recording and the soundboard still work offline.');
       renderOpenverse([]);
     }
@@ -589,6 +623,10 @@ function startDesktopStudio() {
   });
   $('#ov-prev').addEventListener('click', () => runSearch(Math.max(1, ovPage - 1)));
   $('#ov-next').addEventListener('click', () => runSearch(ovPage + 1));
+  $('#ov-cap').addEventListener('change', () => {
+    if (!ovSearched) return;
+    showCappedResults();
+  });
 
   window.mithiumEditClip = (id) => {
     const tab = document.querySelector('.tab[data-tab="record"]');

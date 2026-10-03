@@ -9,6 +9,7 @@ const path = require('path');
 const https = require('https');
 const { spawnSync } = require('child_process');
 const edit = require('../src/shared/editPlan');
+const lengthCap = require('../src/shared/lengthCap');
 const mix = require('../src/shared/mixSession');
 const playback = require('../src/shared/playbackTarget');
 const clipEdit = require('../src/main/clipEdit');
@@ -473,6 +474,27 @@ function doorResult(overrides) {
     assert.strictEqual(mapped.lengthLabel, '');
     assert.strictEqual(openverse.isShortSoundEffect(mapped), false);
     assert.strictEqual(openverse.isShortSoundEffect(openverse.mapResult(doorResult())), true);
+  });
+
+  await test('browse caps keep 30 seconds and under, or 10 seconds and under', () => {
+    assert.strictEqual(lengthCap.capMs('30000'), 30000);
+    assert.strictEqual(lengthCap.capMs(10000), 10000);
+    assert.strictEqual(lengthCap.capMs('other'), 30000);
+    assert.strictEqual(lengthCap.matches(10000, 10000), true);
+    assert.strictEqual(lengthCap.matches(10001, 10000), false);
+    assert.strictEqual(lengthCap.matches(21174, 10000), false);
+    assert.strictEqual(lengthCap.matches(21174, 30000), true);
+    assert.strictEqual(lengthCap.matches(29999, 30000), true);
+    assert.strictEqual(lengthCap.matches(30000, 30000), false);
+    assert.strictEqual(lengthCap.matches(180000, 10000), false);
+    const page = [
+      openverse.mapResult(doorResult({ duration: 1400 })),
+      openverse.mapResult(doorResult({ id: 'long-slam', duration: 21174 })),
+    ];
+    const ten = page.filter((row) => lengthCap.matches(row.durationMs, 10000));
+    const thirty = page.filter((row) => lengthCap.matches(row.durationMs, 30000));
+    assert.deepStrictEqual(ten.map((row) => row.lengthLabel), ['1.4s']);
+    assert.deepStrictEqual(thirty.map((row) => row.lengthLabel), ['1.4s', '21s']);
   });
 
   await test('a down network is an offline error, not an empty board', async () => {

@@ -13,6 +13,8 @@
 // the list using those fields. Nothing is downloaded just to measure length.
 // Preview and import fetch a single chosen file.
 
+const lengthCap = require('../shared/lengthCap');
+
 const AUDIO_ROOT = 'https://api.openverse.org/v1/audio/';
 const USER_AGENT = 'MithiumSound/1.11 (soundboard)';
 const MAX_AUDIO_BYTES = 32 * 1024 * 1024;
@@ -133,8 +135,7 @@ function isShortSoundEffect(mapped) {
   if (!mapped) return false;
   const category = String(mapped.category || '').trim().toLowerCase();
   if (category && category !== 'sound_effect') return false;
-  const duration = Number(mapped.durationMs);
-  return Number.isFinite(duration) && duration > 0 && duration < MAX_SOUND_EFFECT_MS;
+  return lengthCap.matches(mapped.durationMs, lengthCap.MAX_MS);
 }
 
 function usableAudioUrl(row) {
