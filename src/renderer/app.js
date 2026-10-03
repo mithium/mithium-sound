@@ -1783,8 +1783,9 @@ async function handleLegacyKeyUp(key) {
 }
 
 // --- Keyboard Handlers ---
-// Focused window uses these. Unfocused / tray uses the global hook in main,
-// which calls the same loaded-clip path. Text fields are left alone.
+// Focused window uses these. Unfocused, tray, and fullscreen games use the
+// global hotkey listener in main, which calls the same loaded-clip path.
+// Text fields are left alone.
 document.addEventListener('keydown', async (e) => {
   const target = e.target;
   const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';

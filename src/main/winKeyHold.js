@@ -41,26 +41,53 @@ function createWinKeyHold() {
   function ensure() {
     if (process.platform !== 'win32') return Promise.resolve(false);
     if (proc && proc.exitCode == null && !proc.killed) return ready;
-    proc = spawn(
+    const child = spawn(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-Command', PS_SCRIPT],
       { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
     );
+    proc = child;
     ready = new Promise((resolve) => {
       const onData = (buf) => {
         if (String(buf).includes('ready')) {
-          proc.stdout.off('data', onData);
+          child.stdout.off('data', onData);
           resolve(true);
         }
       };
-      proc.stdout.on('data', onData);
-      proc.on('error', () => resolve(false));
-      proc.on('exit', () => {
-        proc = null;
-        ready = null;
+      child.stdout.on('data', onData);
+      child.on('error', () => resolve(false));
+      child.on('exit', () => {
+        if (proc === child) {
+          proc = null;
+          ready = null;
+        }
       });
     });
     return ready;
+  }
+
+  function finish(releaseKeys) {
+    if (!proc) return;
+    const child = proc;
+    proc = null;
+    ready = null;
+    try {
+      if (child.stdin && !child.stdin.destroyed) {
+        const ups = releaseKeys ? 'up 56 2F\nup 54 14\n' : '';
+        child.stdin.write(`${ups}exit\n`);
+      }
+    } catch {
+      // Process is already gone.
+    }
+    if (!releaseKeys) {
+      try { child.kill(); } catch { /* already gone */ }
+      return;
+    }
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch { /* already gone */ }
+    }, 500);
+    if (typeof timer.unref === 'function') timer.unref();
+    child.once('exit', () => clearTimeout(timer));
   }
 
   async function send(dir, name) {
@@ -87,13 +114,13 @@ function createWinKeyHold() {
       await send('up', 'v');
       await send('up', 't');
     },
+    // Drop the helper. releaseKeys sends V/T up first, for a simulated hold.
+    // A normal quit only exits the process, so a physical V or T is left alone.
     dispose() {
-      if (!proc || !proc.stdin || proc.stdin.destroyed) return;
-      try {
-        proc.stdin.write('up 56 2F\nup 54 14\nexit\n');
-      } catch {
-        // Process is already gone.
-      }
+      finish(true);
+    },
+    close() {
+      finish(false);
     },
   };
 }
