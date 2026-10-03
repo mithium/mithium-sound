@@ -61,8 +61,9 @@ function createLoadedClipService({ injector, getSounds, readSettings, writeSetti
   }
 
   async function releaseHold(opts = {}) {
-    const decision = control.hardStop();
+    const decision = control.hardStop({ unload: !!opts.unload });
     await releaseKey(decision.key);
+    if (opts.unload) persist();
     emit();
     if (opts.stopAudio && hooks && hooks.onHardStop) {
       hooks.onHardStop({ notifyRenderer: !!opts.notifyRenderer });
@@ -139,11 +140,14 @@ function createLoadedClipService({ injector, getSounds, readSettings, writeSetti
       return releaseHold({
         stopAudio: true,
         notifyRenderer: !!opts.notifyRenderer,
+        unload: true,
       });
     },
     async clipEnded() {
       const decision = control.clipEnded();
       await releaseKey(decision.key);
+      // Ignore a second end after the clip is already unloaded.
+      if (decision.type === 'clip-ended') persist();
       emit();
       return decision;
     },
@@ -158,7 +162,7 @@ function createLoadedClipService({ injector, getSounds, readSettings, writeSetti
       await dropIfMissing();
     },
     async shutdown() {
-      const decision = control.hardStop();
+      const decision = control.hardStop({ unload: false });
       if (decision.key) await releaseKey(decision.key);
     },
   };

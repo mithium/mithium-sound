@@ -100,7 +100,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('global-hotkey:keyup', (_e, key) => cb(key));
   },
 
-  // Phone-loaded clip. V/T play it; hard stops release a simulated key.
+  // Phone-loaded clip. V/T play it once. Finish and hard stop unload it.
   loadedClipGetState: () => ipcRenderer.invoke('loaded-clip:get-state'),
   loadedClipKeyDown: (key) => ipcRenderer.invoke('loaded-clip:key-down', key),
   loadedClipKeyUp: (key) => ipcRenderer.invoke('loaded-clip:key-up', key),

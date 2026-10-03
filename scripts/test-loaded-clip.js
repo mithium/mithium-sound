@@ -94,23 +94,73 @@ function fakeInjector() {
     assert.strictEqual(control.keyUp('t').type, 'ignore');
   });
 
-  await test('hard stop releases whichever key was held', async () => {
+  await test('hard stop releases whichever key was held and unloads the clip', async () => {
     const control = createController({ loadedId: 3 });
     control.arm('t');
     assert.deepStrictEqual(control.hardStop(), { type: 'hard-stop', key: 't' });
     assert.strictEqual(control.snapshot().simulating, null);
     assert.strictEqual(control.snapshot().playbackActive, false);
+    assert.strictEqual(control.snapshot().id, null);
+    assert.strictEqual(control.arm('t').type, 'legacy');
+    assert.strictEqual(control.arm('v').type, 'legacy');
     const ack = control.keyUp('t');
     assert.strictEqual(ack.type, 'release-ack');
     assert.ok(!ack.swallow);
     assert.strictEqual(hookSwallowResult(ack), undefined);
   });
 
-  await test('clip end releases the simulated key', () => {
+  await test('hard stop before a press still unloads the armed clip', () => {
+    const control = createController({ loadedId: 3 });
+    assert.deepStrictEqual(control.hardStop(), { type: 'hard-stop', key: null });
+    assert.strictEqual(control.snapshot().id, null);
+    assert.strictEqual(control.arm('v').type, 'legacy');
+  });
+
+  await test('stopping playback without unload keeps the clip armed', () => {
+    const control = createController({ loadedId: 3 });
+    control.arm('v');
+    assert.deepStrictEqual(control.hardStop({ unload: false }), { type: 'hard-stop', key: 'v' });
+    assert.strictEqual(control.snapshot().id, 3);
+    assert.strictEqual(control.snapshot().playbackActive, false);
+    assert.strictEqual(control.snapshot().simulating, null);
+  });
+
+  await test('clip end releases the simulated key and unloads the clip', () => {
     const control = createController({ loadedId: 3 });
     control.arm('v');
     assert.deepStrictEqual(control.clipEnded(), { type: 'clip-ended', key: 'v' });
+    assert.strictEqual(control.snapshot().id, null);
+    assert.strictEqual(control.snapshot().playbackActive, false);
+    assert.strictEqual(control.snapshot().simulating, null);
     assert.strictEqual(control.clipEnded().type, 'ignore');
+    assert.strictEqual(control.arm('v').type, 'legacy');
+    assert.strictEqual(control.arm('t').type, 'legacy');
+  });
+
+  await test('clip end with auto-hold off unloads and does not invent a held key', () => {
+    const control = createController({ loadedId: 8, autoHold: false });
+    const play = control.arm('t');
+    assert.strictEqual(play.simulate, false);
+    assert.deepStrictEqual(control.clipEnded(), { type: 'clip-ended', key: null });
+    assert.strictEqual(control.snapshot().id, null);
+    assert.strictEqual(control.snapshot().autoHold, false);
+    assert.strictEqual(control.arm('t').type, 'legacy');
+  });
+
+  await test('a clip end that is not playing leaves the loaded clip armed', () => {
+    const control = createController({ loadedId: 3 });
+    assert.deepStrictEqual(control.clipEnded(), { type: 'ignore', key: null });
+    assert.strictEqual(control.snapshot().id, 3);
+    assert.strictEqual(control.arm('v').type, 'play');
+  });
+
+  await test('a failed play releases the key and leaves the clip loaded', () => {
+    const control = createController({ loadedId: 3 });
+    control.arm('v');
+    assert.deepStrictEqual(control.playFailed(), { type: 'play-failed', key: 'v' });
+    assert.strictEqual(control.snapshot().id, 3);
+    assert.strictEqual(control.snapshot().playbackActive, false);
+    assert.strictEqual(control.arm('v').id, 3);
   });
 
   await test('turning auto-hold off releases a held key and leaves playback running', () => {
@@ -166,7 +216,10 @@ function fakeInjector() {
     await flushImmediate();
     assert.deepStrictEqual(injector.events, [['down', 'v'], ['up', 'v']]);
     assert.deepStrictEqual(stops, [{ notifyRenderer: true }]);
-    assert.strictEqual(service.snapshot ? service.publicState().simulating : service.publicState().simulating, null);
+    assert.strictEqual(service.publicState().simulating, null);
+    assert.strictEqual(service.publicState().id, null);
+    assert.strictEqual(service.keyDown('v').type, 'legacy');
+    assert.strictEqual(service.keyDown('t').type, 'legacy');
   });
 
   await test('saved auto-hold off is restored and does not inject a key', async () => {
@@ -186,6 +239,9 @@ function fakeInjector() {
     assert.deepStrictEqual(injector.events, []);
     await service.hardStop({ notifyRenderer: false });
     assert.deepStrictEqual(injector.events, []);
+    assert.strictEqual(service.publicState().id, null);
+    assert.strictEqual(service.publicState().autoHold, false);
+    assert.strictEqual(service.keyDown('t').type, 'legacy');
   });
 
   await test('hard stop before the deferred hold does not press the key again', async () => {
@@ -204,6 +260,8 @@ function fakeInjector() {
     assert.deepStrictEqual(injector.events, [['up', 'v']]);
     assert.strictEqual(service.publicState().simulating, null);
     assert.strictEqual(service.publicState().playbackActive, false);
+    assert.strictEqual(service.publicState().id, null);
+    assert.strictEqual(service.keyDown('v').type, 'legacy');
   });
 
   await test('clip end after a press releases the key and does not re-hold it', async () => {
@@ -222,6 +280,97 @@ function fakeInjector() {
     await flushImmediate();
     assert.deepStrictEqual(injector.events, [['down', 't'], ['up', 't']]);
     assert.strictEqual(service.publicState().simulating, null);
+    assert.strictEqual(service.publicState().id, null);
+    assert.strictEqual(service.keyDown('t').type, 'legacy');
+    assert.strictEqual(service.keyDown('v').type, 'legacy');
+  });
+
+  await test('a finished clip is persisted unloaded and can be loaded again', async () => {
+    const injector = fakeInjector();
+    const saved = [];
+    const service = createLoadedClipService({
+      injector,
+      getSounds: () => [{ id: 9, name: 'Horn' }],
+      readSettings: () => ({ loadedClipId: 9, loadedClipAutoHold: true }),
+      writeSettings: (partial) => saved.push(partial),
+      hooks: { onState: () => {} },
+    });
+    service.keyDown('v');
+    service.keyUp('v');
+    await flushImmediate();
+    await service.clipEnded();
+    assert.strictEqual(service.publicState().id, null);
+    assert.strictEqual(service.publicState().name, null);
+    assert.strictEqual(service.publicState().autoHold, true);
+    assert.strictEqual(service.publicState().playbackActive, false);
+    assert.ok(saved.some((partial) => partial.loadedClipId == null && partial.loadedClipAutoHold === true));
+    assert.strictEqual(service.keyDown('v').type, 'legacy');
+    await service.setLoaded(9);
+    const again = service.keyDown('v');
+    assert.strictEqual(again.type, 'play');
+    assert.strictEqual(again.id, 9);
+    assert.strictEqual(again.simulate, true);
+  });
+
+  await test('Delete or Stop unloads a clip that was not playing and remembers that', async () => {
+    const saved = [];
+    const service = createLoadedClipService({
+      injector: fakeInjector(),
+      getSounds: () => [{ id: 9, name: 'Horn' }],
+      readSettings: () => ({ loadedClipId: 9, loadedClipAutoHold: true }),
+      writeSettings: (partial) => saved.push(partial),
+      hooks: { onHardStop: () => {}, onState: () => {} },
+    });
+    await service.hardStop({ notifyRenderer: true });
+    assert.strictEqual(service.publicState().id, null);
+    assert.strictEqual(service.keyDown('t').type, 'legacy');
+    assert.deepStrictEqual(saved[saved.length - 1], {
+      loadedClipId: null,
+      loadedClipAutoHold: true,
+    });
+  });
+
+  await test('loading a different clip while one is playing keeps the new clip armed', async () => {
+    const service = createLoadedClipService({
+      injector: fakeInjector(),
+      getSounds: () => [{ id: 9, name: 'Horn' }, { id: 4, name: 'Bell' }],
+      readSettings: () => ({ loadedClipId: 9 }),
+      writeSettings: () => {},
+      hooks: { onHardStop: () => {}, onState: () => {} },
+    });
+    assert.strictEqual(service.keyDown('v').type, 'play');
+    await service.setLoaded(4);
+    assert.strictEqual(service.publicState().id, 4);
+    assert.strictEqual(service.publicState().name, 'Bell');
+    assert.strictEqual(service.publicState().playbackActive, false);
+    assert.strictEqual(service.publicState().simulating, null);
+    const play = service.keyDown('t');
+    assert.strictEqual(play.type, 'play');
+    assert.strictEqual(play.id, 4);
+    assert.strictEqual(play.simulate, true);
+  });
+
+  await test('a failed play releases the hold and leaves the clip loaded for another press', async () => {
+    const injector = fakeInjector();
+    const stops = [];
+    const service = createLoadedClipService({
+      injector,
+      getSounds: () => [{ id: 9, name: 'Horn' }],
+      readSettings: () => ({ loadedClipId: 9 }),
+      writeSettings: () => {},
+      hooks: { onHardStop: (opts) => stops.push(opts), onState: () => {} },
+    });
+    service.keyDown('v');
+    service.keyUp('v');
+    await flushImmediate();
+    await service.playFailed();
+    assert.deepStrictEqual(injector.events, [['down', 'v'], ['up', 'v']]);
+    assert.strictEqual(service.publicState().id, 9);
+    assert.strictEqual(service.publicState().simulating, null);
+    assert.deepStrictEqual(stops, [{ notifyRenderer: false }]);
+    const retry = service.keyDown('v');
+    assert.strictEqual(retry.type, 'play');
+    assert.strictEqual(retry.id, 9);
   });
 
   await test('scan-code hold is injected, and the hook package is left in place', () => {
