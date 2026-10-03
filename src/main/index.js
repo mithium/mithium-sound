@@ -64,7 +64,7 @@ const homeserver = require('./homeserver');
 const loadedClip = require('./loadedClip');
 const studio = require('./studioRoutes');
 const { createWinKeyHold } = require('./winKeyHold');
-const { classifyGlobalEvent } = require('./loadedClipControl');
+const { classifyGlobalEvent, hookSwallowResult } = require('./loadedClipControl');
 
 let mainWindow = null;
 let tray = null;
@@ -262,6 +262,9 @@ function dispatchLoadedKeyUp(key, { fromRenderer } = {}) {
 
 function initLoadedClip() {
   keyHold = createWinKeyHold();
+  // Start the key helper now. Spawning it from a key-up hook exceeds the
+  // hook's reply window, and the physical key-up is then forced through.
+  keyHold.warm();
   loadedClip.init({
     injector: keyHold,
     getSounds: () => soundboard.getAllSounds(),
@@ -355,7 +358,9 @@ function registerGlobalShortcuts() {
       if (modified) return;
 
       // Focused window: renderer handles V/T/Delete so text fields still work.
-      // Unfocused / tray: this hook is the only path for those keys.
+      // Unfocused / tray / game: this hook is the only path for those keys.
+      // Reply immediately. The hook drops the event if this callback stalls,
+      // which would let a physical V/T release through and cancel auto-hold.
       if (mainWindow.isFocused()) return;
 
       if (classified.down) {
@@ -364,9 +369,15 @@ function registerGlobalShortcuts() {
           return;
         }
         dispatchLoadedKeyDown(classified.key, { fromRenderer: false });
-      } else if (classified.key !== 'Delete') {
-        dispatchLoadedKeyUp(classified.key, { fromRenderer: false });
+        return;
       }
+      if (classified.key === 'Delete') return;
+      const decision = dispatchLoadedKeyUp(classified.key, { fromRenderer: false });
+      // Eat the physical key-up while auto-hold still owns that key. The
+      // replacement key-down is injected after this returns. The key-up from
+      // Delete, Stop, or the clip ending is not marked swallow, so it is
+      // delivered and the simulated key is not stuck.
+      if (hookSwallowResult(decision)) return true;
     });
     
     console.log('Global keyboard listener started for V, T, and Delete');
@@ -435,7 +446,10 @@ app.on('before-quit', (event) => {
   app.isQuitting = true;
   if (quitReleaseStarted) return;
   const service = loadedClip.getService();
-  if (!service || !service.publicState().simulating) return;
+  if (!service || !service.publicState().simulating) {
+    if (keyHold) keyHold.close();
+    return;
+  }
   event.preventDefault();
   quitReleaseStarted = true;
   const release = service.shutdown().catch((err) => {

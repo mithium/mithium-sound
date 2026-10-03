@@ -3,11 +3,23 @@
 //   node scripts/test-loaded-clip.js
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const {
   createController,
   classifyGlobalEvent,
+  hookSwallowResult,
 } = require('../src/main/loadedClipControl');
 const { createLoadedClipService } = require('../src/main/loadedClip');
+const {
+  injectionScript,
+  KEYEVENTF_KEYUP,
+  KEYEVENTF_SCANCODE,
+} = require('../src/main/winKeyHold');
+
+function flushImmediate() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 let passed = 0;
 
@@ -69,7 +81,8 @@ function fakeInjector() {
     assert.strictEqual(play.simulate, true);
     assert.strictEqual(play.key, 'v');
     assert.strictEqual(control.arm('t').type, 'ignore');
-    assert.deepStrictEqual(control.keyUp('v'), { type: 'reassert', key: 'v' });
+    assert.deepStrictEqual(control.keyUp('v'), { type: 'reassert', key: 'v', swallow: true });
+    assert.strictEqual(hookSwallowResult(control.keyUp('v')), true);
     assert.strictEqual(control.snapshot().simulating, 'v');
   });
 
@@ -87,7 +100,10 @@ function fakeInjector() {
     assert.deepStrictEqual(control.hardStop(), { type: 'hard-stop', key: 't' });
     assert.strictEqual(control.snapshot().simulating, null);
     assert.strictEqual(control.snapshot().playbackActive, false);
-    assert.strictEqual(control.keyUp('t').type, 'release-ack');
+    const ack = control.keyUp('t');
+    assert.strictEqual(ack.type, 'release-ack');
+    assert.ok(!ack.swallow);
+    assert.strictEqual(hookSwallowResult(ack), undefined);
   });
 
   await test('clip end releases the simulated key', () => {
@@ -139,9 +155,15 @@ function fakeInjector() {
     const play = service.keyDown('v');
     assert.strictEqual(play.type, 'play');
     assert.strictEqual(play.simulate, true);
-    assert.strictEqual(service.keyUp('v').type, 'reassert');
+    const up = service.keyUp('v');
+    assert.strictEqual(up.type, 'reassert');
+    assert.strictEqual(up.swallow, true);
+    assert.deepStrictEqual(injector.events, []);
+    await flushImmediate();
     assert.deepStrictEqual(injector.events, [['down', 'v']]);
     await service.hardStop({ notifyRenderer: true });
+    assert.deepStrictEqual(injector.events, [['down', 'v'], ['up', 'v']]);
+    await flushImmediate();
     assert.deepStrictEqual(injector.events, [['down', 'v'], ['up', 'v']]);
     assert.deepStrictEqual(stops, [{ notifyRenderer: true }]);
     assert.strictEqual(service.snapshot ? service.publicState().simulating : service.publicState().simulating, null);
@@ -164,6 +186,66 @@ function fakeInjector() {
     assert.deepStrictEqual(injector.events, []);
     await service.hardStop({ notifyRenderer: false });
     assert.deepStrictEqual(injector.events, []);
+  });
+
+  await test('hard stop before the deferred hold does not press the key again', async () => {
+    const injector = fakeInjector();
+    const service = createLoadedClipService({
+      injector,
+      getSounds: () => [{ id: 9, name: 'Horn' }],
+      readSettings: () => ({ loadedClipId: 9 }),
+      writeSettings: () => {},
+      hooks: { onHardStop: () => {}, onState: () => {} },
+    });
+    service.keyDown('v');
+    assert.strictEqual(service.keyUp('v').swallow, true);
+    await service.hardStop({ notifyRenderer: true });
+    await flushImmediate();
+    assert.deepStrictEqual(injector.events, [['up', 'v']]);
+    assert.strictEqual(service.publicState().simulating, null);
+    assert.strictEqual(service.publicState().playbackActive, false);
+  });
+
+  await test('clip end after a press releases the key and does not re-hold it', async () => {
+    const injector = fakeInjector();
+    const service = createLoadedClipService({
+      injector,
+      getSounds: () => [{ id: 9, name: 'Horn' }],
+      readSettings: () => ({ loadedClipId: 9 }),
+      writeSettings: () => {},
+      hooks: { onState: () => {} },
+    });
+    service.keyDown('t');
+    service.keyUp('t');
+    await flushImmediate();
+    await service.clipEnded();
+    await flushImmediate();
+    assert.deepStrictEqual(injector.events, [['down', 't'], ['up', 't']]);
+    assert.strictEqual(service.publicState().simulating, null);
+  });
+
+  await test('scan-code hold is injected, and the hook package is left in place', () => {
+    assert.strictEqual(KEYEVENTF_SCANCODE, 0x0008);
+    assert.strictEqual(KEYEVENTF_KEYUP, 0x0002);
+    assert.ok(injectionScript.includes('MapVirtualKey'));
+    assert.ok(injectionScript.includes('keybd_event'));
+    assert.ok(injectionScript.includes(`[uint32]${KEYEVENTF_SCANCODE}`));
+    assert.ok(injectionScript.includes(`[uint32]${KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP}`));
+    assert.ok(!injectionScript.includes('[uint32]0'));
+    assert.ok(!injectionScript.includes('SendInput'));
+    const root = path.join(__dirname, '..');
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const index = fs.readFileSync(path.join(root, 'src/main/index.js'), 'utf8');
+    const builder = fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8');
+    assert.ok(pkg.dependencies['node-global-key-listener']);
+    assert.ok(index.includes('node-global-key-listener'));
+    assert.ok(index.includes('hookSwallowResult'));
+    assert.ok(index.includes('if (hookSwallowResult(decision)) return true;'));
+    assert.ok(index.includes('keyHold.warm()'));
+    assert.ok(index.includes('keyHold.close()'));
+    assert.ok(!index.includes('requireAdministrator'));
+    assert.ok(builder.includes('node-global-key-listener'));
+    assert.ok(!index.includes("name === 'B'"));
   });
 
   if (process.exitCode) {

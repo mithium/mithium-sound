@@ -42,7 +42,21 @@ function createLoadedClipService({ injector, getSounds, readSettings, writeSetti
     if (hooks && hooks.onState) hooks.onState(publicState());
   }
 
+  // Bumped on every release so a key-down scheduled from key-up cannot land
+  // after Delete, Stop, or the clip ending and leave the key stuck down.
+  let holdGeneration = 0;
+
+  function scheduleReassert(key) {
+    const gen = holdGeneration;
+    setImmediate(() => {
+      if (gen !== holdGeneration) return;
+      if (control.snapshot().simulating !== key) return;
+      if (injector) injector.keyDown(key);
+    });
+  }
+
   async function releaseKey(key) {
+    holdGeneration += 1;
     if (key && injector) await injector.keyUp(key);
   }
 
@@ -115,9 +129,10 @@ function createLoadedClipService({ injector, getSounds, readSettings, writeSetti
     },
     keyUp(key) {
       const decision = control.keyUp(key);
-      if (decision.type === 'reassert' && injector) {
-        injector.keyDown(decision.key);
-      }
+      // After the hook returns, not inside it. keybd_event from inside the
+      // key-up hook is delivered before that key-up, so the physical release
+      // wins and the simulated hold never sticks.
+      if (decision.type === 'reassert') scheduleReassert(decision.key);
       return decision;
     },
     async hardStop(opts = {}) {
