@@ -7,6 +7,8 @@
 // the key-up hook loses, because that physical key-up is delivered afterward
 // and clears the key. Hard stop is Delete, the Windows Stop button, or Stop
 // on the phone remote. Auto-hold off plays the clip and does not hold a key.
+// A clip that finishes on its own, or a hard stop, unloads it. The next V or
+// T does not play it again until a clip is loaded.
 
 function createController(initial = {}) {
   let loadedId = normalizeId(initial.loadedId);
@@ -70,13 +72,19 @@ function createController(initial = {}) {
     return key;
   }
 
-  function hardStop() {
-    return { type: 'hard-stop', key: takeRelease() };
+  function hardStop(opts = {}) {
+    const key = takeRelease();
+    // Delete and Stop unload. Pass { unload: false } when playback is stopping
+    // only so the caller can store a different clip, or on quit.
+    if (!opts || opts.unload !== false) loadedId = null;
+    return { type: 'hard-stop', key };
   }
 
   function clipEnded() {
     if (!playbackActive && !simulatedKey) return { type: 'ignore', key: null };
-    return { type: 'clip-ended', key: takeRelease() };
+    const key = takeRelease();
+    loadedId = null;
+    return { type: 'clip-ended', key };
   }
 
   function playFailed() {

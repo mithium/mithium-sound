@@ -247,8 +247,8 @@ function updateLoadedPanel() {
   }
 
   loadedHint.textContent = autoHold !== false
-    ? 'On: one press of V or T on the PC plays this clip and holds that key until it ends or you stop it.'
-    : 'Off: one press of V or T plays this clip and does not hold the key down.';
+    ? 'On: one press of V or T on the PC plays this clip and holds that key until it ends or you stop it. The clip unloads when it finishes or you stop it, so the next press does not play it again.'
+    : 'Off: one press of V or T plays this clip and does not hold the key down. The clip unloads when it finishes or you stop it.';
 }
 
 function applyLoadedState(data) {
