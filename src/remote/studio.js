@@ -454,17 +454,18 @@
   }
 
   async function previewResult(id) {
-    const headers = state().authHeaders();
-    const response = await fetch(`/api/openverse/preview/${encodeURIComponent(id)}`, { headers });
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.error || 'Preview failed');
+    if (window.mithiumHearOnPhone && window.mithiumHearOnPhone()) {
+      const headers = state().authHeaders();
+      const response = await fetch(`/api/openverse/preview/${encodeURIComponent(id)}`, { headers });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Preview failed');
+      }
+      await window.mithiumPlayOnPhone(await response.blob());
+      return;
     }
-    const blob = await response.blob();
-    const player = $('#ov-player');
-    player.src = URL.createObjectURL(blob);
-    player.classList.remove('hidden');
-    await player.play();
+    if (window.mithiumStopPhonePlayback) window.mithiumStopPhonePlayback();
+    await api(`/api/openverse/preview/${encodeURIComponent(id)}/play`, { method: 'POST' });
   }
 
   async function importResult(result) {

@@ -24,6 +24,7 @@ const DEFAULTS = {
   loadedClipId: null,
   loadedClipAutoHold: true,
   recordDeviceId: '',
+  remoteHearOnPhone: false,
 };
 
 let cache = null;

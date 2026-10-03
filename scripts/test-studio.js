@@ -9,6 +9,7 @@ const path = require('path');
 const https = require('https');
 const { spawnSync } = require('child_process');
 const edit = require('../src/shared/editPlan');
+const playback = require('../src/shared/playbackTarget');
 const clipEdit = require('../src/main/clipEdit');
 const openverse = require('../src/main/openverse');
 const remoteCert = require('../src/main/remoteCert');
@@ -81,6 +82,13 @@ function doorResult(overrides) {
 }
 
 (async () => {
+  await test('phone remote hears on Windows unless the audition toggle is on', () => {
+    assert.strictEqual(playback.playbackTarget(false), 'windows');
+    assert.strictEqual(playback.playbackTarget(undefined), 'windows');
+    assert.strictEqual(playback.playbackTarget(null), 'windows');
+    assert.strictEqual(playback.playbackTarget(true), 'phone');
+  });
+
   await test('before, middle, and after stay in that order', () => {
     const timeline = edit.buildEditTimeline({
       baseId: 10,

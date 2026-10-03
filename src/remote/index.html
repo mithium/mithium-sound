@@ -31,6 +31,14 @@
       <span id="volume-value">100%</span>
     </div>
   </div>
+  <div class="hear-bar">
+    <label class="auto-hold-toggle" for="hear-on-phone">
+      <input type="checkbox" id="hear-on-phone">
+      <span>Hear on this phone</span>
+    </label>
+    <p id="hear-hint" class="loaded-hint">Off: clips and Openverse previews play on the Windows PC. On: audition on this phone’s speaker only.</p>
+    <audio id="phone-player" class="hidden" controls></audio>
+  </div>
 
   <section id="loaded-panel" class="loaded-panel">
     <div class="loaded-panel-top">
@@ -105,7 +113,6 @@
       <button id="ov-prev" type="button" class="hidden">Previous</button>
       <button id="ov-next" type="button" class="hidden">Next</button>
     </div>
-    <audio id="ov-player" class="hidden" controls></audio>
   </section>
 
   <!-- Sound Grid -->
@@ -120,6 +127,7 @@
     <span id="error-message"></span>
   </div>
 
+  <script src="/shared/playbackTarget.js"></script>
   <script src="/shared/editPlan.js"></script>
   <script src="/shared/waveform.js"></script>
   <script src="app.js"></script>
