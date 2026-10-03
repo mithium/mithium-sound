@@ -569,6 +569,22 @@ ipcMain.handle('clip:render', async (_e, plan) => {
   return sound;
 });
 
+ipcMain.handle('clip:mix', async (_e, payload) => {
+  const body = payload || {};
+  const result = await studio.renderMix({
+    name: body.name,
+    groupId: body.groupId,
+    clips: body.clips,
+    sources: body.sources,
+    save: body.save === true,
+  });
+  if (body.save === true) {
+    libraryMutated();
+    return { sound: result.sound };
+  }
+  return { filePath: result.filePath };
+});
+
 ipcMain.handle('openverse:search', (_e, query, page) => studio.searchOpenverse(query, page));
 
 ipcMain.handle('openverse:preview', async (_e, id) => {

@@ -83,6 +83,52 @@ async function probeDurationMs(ffmpegPath, filePath) {
   return duration;
 }
 
+function buildMixPlan(clips, filesBySource) {
+  if (!Array.isArray(clips) || !clips.length) throw new Error('Nothing to play yet');
+  const keys = [];
+  for (const clip of clips) {
+    if (!clip || !clip.sourceKey) throw new Error('A track is missing its audio');
+    if (!keys.includes(clip.sourceKey)) keys.push(clip.sourceKey);
+    if (!filesBySource[clip.sourceKey]) throw new Error('A track is missing its audio');
+    const duration = Number(clip.durationMs);
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error('A clip in this mix has no length');
+  }
+  const indexOf = new Map(keys.map((key, index) => [key, index]));
+  const filters = [];
+  const labels = [];
+  clips.forEach((clip, index) => {
+    const input = indexOf.get(clip.sourceKey);
+    const label = `m${index}`;
+    const offset = Number(clip.offsetMs) || 0;
+    const start = (offset / 1000).toFixed(3);
+    const end = ((offset + Number(clip.durationMs)) / 1000).toFixed(3);
+    const delay = Math.max(0, Math.round(Number(clip.startMs) || 0));
+    const format = 'aformat=sample_fmts=s16:sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS';
+    filters.push(`[${input}:a]atrim=start=${start}:end=${end},${format},adelay=${delay}|${delay}[${label}]`);
+    labels.push(`[${label}]`);
+  });
+  if (labels.length === 1) {
+    filters[0] = filters[0].replace(/\[[^\]]+\]$/, '[out]');
+  } else {
+    filters.push(`${labels.join('')}amix=inputs=${labels.length}:duration=longest:dropout_transition=0:normalize=0[out]`);
+  }
+  return {
+    inputs: keys.map((key) => filesBySource[key]),
+    inputOrder: keys,
+    filter: filters.join(';'),
+  };
+}
+
+async function renderMix({ ffmpegPath, clips, filesBySource, outputPath }) {
+  if (!ffmpegPath) throw new Error('FFmpeg was not found. Clip editing needs the bundled FFmpeg.');
+  const plan = buildMixPlan(clips, filesBySource);
+  const args = ['-y', '-hide_banner'];
+  for (const input of plan.inputs) args.push('-i', input);
+  args.push('-filter_complex', plan.filter, '-map', '[out]', '-c:a', 'pcm_s16le', outputPath);
+  await runFfmpeg(ffmpegPath, args, { timeoutMs: 180000 });
+  return plan;
+}
+
 async function renderTimeline({ ffmpegPath, timeline, filesByClipId, outputPath }) {
   if (!ffmpegPath) throw new Error('FFmpeg was not found. Clip editing needs the bundled FFmpeg.');
   const plan = buildRenderPlan(timeline, filesByClipId);
@@ -97,8 +143,10 @@ async function renderTimeline({ ffmpegPath, timeline, filesByClipId, outputPath 
 
 module.exports = {
   buildRenderPlan,
+  buildMixPlan,
   parseDurationMs,
   probeDurationMs,
   renderTimeline,
+  renderMix,
   runFfmpeg,
 };

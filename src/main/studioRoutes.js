@@ -1,4 +1,6 @@
+const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const soundboard = require('./soundboard');
 const { buildEditTimeline } = require('../shared/editPlan');
@@ -6,6 +8,7 @@ const clipEdit = require('./clipEdit');
 const openverse = require('./openverse');
 
 const previewCache = new Map();
+const scratches = new Map();
 
 function ffmpegPath() {
   return process.env.FFMPEG_BIN || '';
@@ -235,9 +238,101 @@ async function importOpenverse({ id, name, groupId }) {
   }
 }
 
+function saveScratch(bytes, mime) {
+  const buffer = Buffer.from(bytes || []);
+  if (!buffer.length) throw httpError('Recording was empty', 400);
+  if (buffer.length > 40 * 1024 * 1024) throw httpError('Recording is too large', 413);
+  const id = crypto.randomBytes(8).toString('hex');
+  const filePath = path.join(os.tmpdir(), `mithium-scratch-${id}${extensionForMime(mime)}`);
+  fs.writeFileSync(filePath, buffer);
+  scratches.set(id, filePath);
+  while (scratches.size > 24) {
+    const oldest = scratches.keys().next().value;
+    const oldPath = scratches.get(oldest);
+    scratches.delete(oldest);
+    if (oldPath && fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+  }
+  return { id, filePath };
+}
+
+function filesForMix(sources) {
+  const files = {};
+  const list = Array.isArray(sources) ? sources : [];
+  for (const source of list) {
+    if (!source || !source.key) throw httpError('A track is missing its audio', 400);
+    if (source.clipId != null && source.clipId !== '') {
+      const sound = soundboard.getSoundById(Number(source.clipId));
+      if (!sound) throw httpError('A clip in this mix is missing', 404);
+      const filePath = soundboard.getFilePath(sound.filename);
+      if (!fs.existsSync(filePath)) throw httpError(`Missing audio for ${sound.name}`, 404);
+      files[source.key] = filePath;
+    } else if (source.scratchId) {
+      const filePath = scratches.get(String(source.scratchId));
+      if (!filePath || !fs.existsSync(filePath)) throw httpError('That recording expired. Record it again.', 400);
+      files[source.key] = filePath;
+    } else if (source.bytes) {
+      files[source.key] = saveScratch(source.bytes, source.mime).filePath;
+    } else {
+      throw httpError('A track is missing its audio', 400);
+    }
+  }
+  return files;
+}
+
+async function renderMix({ name, groupId, clips, sources, save }) {
+  const list = Array.isArray(clips) ? clips : [];
+  const trackIds = new Set(list.map((clip) => clip.trackId).filter(Boolean));
+  if (trackIds.size > 10) throw httpError('Ten tracks is the limit', 400);
+  if (list.some((clip) => clip.trackKind === 'voice' && clip.clipId != null && clip.sourceKey && String(clip.sourceKey).startsWith('clip:') && clip.trackKind === 'effects')) {
+    throw httpError('Sound effects sit on their own track', 400);
+  }
+  const files = filesForMix(sources);
+  const filename = `mix-${Date.now()}.wav`;
+  const outputPath = save
+    ? path.join(soundboard.getSoundsDir(), filename)
+    : path.join(os.tmpdir(), filename);
+  try {
+    await clipEdit.renderMix({
+      ffmpegPath: ffmpegPath(),
+      clips: list,
+      filesBySource: files,
+      outputPath,
+    });
+  } catch (err) {
+    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+    throw err;
+  }
+  if (!save) {
+    return { filePath: outputPath, bytes: fs.readFileSync(outputPath) };
+  }
+  let renderedDuration = null;
+  try {
+    renderedDuration = await clipEdit.probeDurationMs(ffmpegPath(), outputPath);
+  } catch {
+    renderedDuration = null;
+  }
+  const involved = [];
+  for (const clip of list) {
+    if (clip.clipId == null) continue;
+    involved.push(soundboard.getSoundById(Number(clip.clipId)));
+  }
+  const sound = soundboard.addSound({
+    name: clipName(name, 'Voice mix'),
+    filename,
+    sourceType: 'edit',
+    groupId: liveGroupId(groupId),
+    durationMs: renderedDuration,
+    mimeType: 'audio/wav',
+    attribution: openverse.joinAttribution(involved),
+  });
+  return { sound, filePath: outputPath };
+}
+
 module.exports = {
   saveRecording,
   renderEdit,
+  renderMix,
+  saveScratch,
   probeClip,
   readClip,
   searchOpenverse,

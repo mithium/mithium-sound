@@ -302,68 +302,42 @@
     renderOrder();
   }
 
-  $('#rec-start').addEventListener('click', () => {
-    startRecording().catch((err) => {
-      stopMeter();
-      recording = false;
-      $('#rec-start').disabled = false;
-      $('#rec-stop').disabled = true;
-      showBox($('#rec-error'), err.message || 'Could not start recording');
-    });
-  });
-  $('#rec-stop').addEventListener('click', () => {
-    stopRecording().catch((err) => showBox($('#rec-error'), err.message));
-  });
-  $('#rec-save').addEventListener('click', () => {
-    saveTake().catch((err) => showBox($('#rec-error'), err.message));
-  });
-  wave.addEventListener('click', (event) => {
-    if (recording) return;
-    const rect = wave.getBoundingClientRect();
-    markerRatio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    redraw();
-  });
-  $('#edit-base').addEventListener('change', () => {
-    loadBase($('#edit-base').value).catch((err) => showBox($('#edit-error'), err.message));
-  });
-  $('#edit-before').addEventListener('click', () => addInsert('before'));
-  $('#edit-at').addEventListener('click', () => addInsert('at'));
-  $('#edit-after').addEventListener('click', () => addInsert('after'));
-  $('#edit-render').addEventListener('click', async () => {
-    try {
-      showBox($('#edit-error'), '');
-      if (!baseId && unsavedTake) {
-        const saved = await saveTake({ keepInserts: true });
-        if (!saved) return;
-      }
-      if (!baseId) {
-        showBox($('#edit-error'), 'Save the take or choose a clip first.');
-        return;
-      }
-      $('#edit-render').disabled = true;
-      const match = sounds().find((sound) => Number(sound.id) === Number(baseId));
-      await api('/api/edits', {
+  if (window.MithiumMixEditor) {
+    window.MithiumMixEditor.mount({
+      $: $,
+      sounds: () => sounds(),
+      showError: (message) => showBox($('#rec-error'), message),
+      openMic: async () => {
+        if (!window.isSecureContext) {
+          throw new Error('This browser blocks the microphone on plain HTTP. Open the secure remote link.');
+        }
+        return navigator.mediaDevices.getUserMedia({ audio: true });
+      },
+      loadClipBytes: (id) => api(`/api/sounds/${id}/audio`),
+      probeDuration: async (id) => (await api(`/api/sounds/${id}/probe`)).durationMs,
+      groupId: () => ($('#edit-group').value ? Number($('#edit-group').value) : null),
+      preferLocalPreview: () => !!(window.mithiumHearOnPhone && window.mithiumHearOnPhone()),
+      uploadScratch: async (blob, mime) => {
+        const data = await api('/api/edits/scratch', {
+          method: 'POST',
+          headers: { 'Content-Type': mime || blob.type || 'audio/webm' },
+          body: blob,
+        });
+        return data.id;
+      },
+      playThroughWindows: (payload) => api('/api/edits/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: $('#edit-name').value.trim() || `${match ? match.name : 'Voice'} edit`,
-          groupId: $('#edit-group').value || null,
-          baseId: Number(baseId),
-          inserts: inserts.map((item) => ({
-            clipId: item.clipId,
-            placement: item.placement,
-            atMs: item.atMs,
-          })),
-        }),
-      });
-      inserts = [];
-      $('#rec-status').textContent = 'Rendered a new clip on the PC';
-      renderOrder();
-    } catch (err) {
-      showBox($('#edit-error'), err.message || 'Render failed');
-      renderOrder();
-    }
-  });
+        body: JSON.stringify(Object.assign({ hearOnPhone: false }, payload)),
+      }),
+      saveMix: async (payload) => (await api('/api/edits/mix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })).sound,
+      onSaved: () => {},
+    });
+  }
 
   document.querySelectorAll('.remote-tab').forEach((button) => {
     button.addEventListener('click', () => {
@@ -379,16 +353,12 @@
   window.mithiumRemoteEdit = (id) => {
     const tab = document.querySelector('.remote-tab[data-panel="record"]');
     if (tab) tab.click();
-    loadBase(id).catch((err) => showBox($('#edit-error'), err.message));
+    if (window.mithiumLoadVoice) window.mithiumLoadVoice(id);
   };
   window.mithiumRemoteRefresh = () => {
-    fillGroups($('#rec-group'));
     fillGroups($('#edit-group'));
     fillGroups($('#ov-group'));
-    fillClips($('#edit-base'));
-    fillClips($('#edit-insert'));
-    if (baseId) $('#edit-base').value = String(baseId);
-    renderOrder();
+    if (window.mithiumMixRefresh) window.mithiumMixRefresh();
   };
 
   let ovPage = 1;
@@ -511,7 +481,7 @@
     }
   }
 
-  redraw();
+  if (!window.MithiumMixEditor) redraw();
   window.mithiumRemoteRefresh();
   showSecureBanner();
 })();

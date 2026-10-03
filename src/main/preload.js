@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('api', {
   soundRead: (id) => ipcRenderer.invoke('sound:read', id),
   clipProbe: (id) => ipcRenderer.invoke('clip:probe', id),
   clipRender: (plan) => ipcRenderer.invoke('clip:render', plan),
+  clipMix: (payload) => ipcRenderer.invoke('clip:mix', payload),
   openverseSearch: (query, page) => ipcRenderer.invoke('openverse:search', query, page),
   openversePreview: (id) => ipcRenderer.invoke('openverse:preview', id),
   openverseImport: (payload) => ipcRenderer.invoke('openverse:import', payload),

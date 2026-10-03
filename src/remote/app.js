@@ -399,6 +399,7 @@ async function playSound(id) {
 // Stop playback via API
 async function stopPlayback() {
   stopPhonePlayback();
+  if (window.mithiumStopMixPreview) window.mithiumStopMixPreview();
   try {
     const headers = {
       'Content-Type': 'application/json',
