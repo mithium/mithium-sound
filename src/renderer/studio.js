@@ -430,6 +430,25 @@ function startDesktopStudio() {
   let ovPage = 1;
   let ovPageCount = 1;
   let ovAudioUrl = null;
+  let ovPlayer = null;
+
+  function previewPlayer() {
+    if (!ovPlayer) {
+      ovPlayer = document.createElement('audio');
+      ovPlayer.id = 'ov-player';
+      ovPlayer.className = 'ov-player hidden';
+      ovPlayer.controls = true;
+      ovPlayer.preload = 'none';
+    }
+    return ovPlayer;
+  }
+
+  function clearPreview() {
+    if (!ovPlayer) return;
+    ovPlayer.pause();
+    ovPlayer.classList.add('hidden');
+    if (ovPlayer.parentNode) ovPlayer.parentNode.removeChild(ovPlayer);
+  }
 
   function selectedGroup(id) {
     const value = $(id).value;
@@ -443,9 +462,10 @@ function startDesktopStudio() {
       const data = await window.api.openverseSearch($('#ov-query').value.trim(), page);
       ovPage = data.page || page;
       ovPageCount = data.pageCount || 1;
-      $('#ov-note').textContent = data.fellBack
-        ? (data.note || 'No sound_effect matches. Showing other Openverse audio.')
-        : (data.results && data.results.length ? 'Sound effects' : 'No matches.');
+      const count = data.results && data.results.length;
+      $('#ov-note').textContent = count
+        ? 'Short sound effects'
+        : (ovPage < ovPageCount ? 'No short sound effects on this page.' : 'No short sound effects.');
       renderOpenverse(data.results || []);
       $('#ov-prev').classList.toggle('hidden', ovPage <= 1);
       $('#ov-next').classList.toggle('hidden', ovPage >= ovPageCount);
@@ -457,6 +477,7 @@ function startDesktopStudio() {
   }
 
   function renderOpenverse(results) {
+    clearPreview();
     const host = $('#ov-results');
     host.innerHTML = '';
     results.forEach((result) => {
@@ -467,6 +488,13 @@ function startDesktopStudio() {
       const meta = document.createElement('p');
       meta.className = 'ov-meta';
       meta.textContent = `${result.creator} · ${result.license || 'License unknown'}`;
+      if (result.lengthLabel) {
+        meta.appendChild(document.createTextNode(' · '));
+        const length = document.createElement('span');
+        length.className = 'ov-length';
+        length.textContent = result.lengthLabel;
+        meta.appendChild(length);
+      }
       if (result.sourceUrl) {
         meta.appendChild(document.createTextNode(' · '));
         const link = document.createElement('a');
@@ -483,32 +511,63 @@ function startDesktopStudio() {
       const preview = document.createElement('button');
       preview.type = 'button';
       preview.textContent = 'Preview';
-      preview.addEventListener('click', () => previewResult(result.id));
+      preview.addEventListener('click', () => previewResult(result.id, card));
       const add = document.createElement('button');
       add.type = 'button';
       add.textContent = 'Add to soundboard';
       add.addEventListener('click', () => importResult(result));
       actions.appendChild(preview);
       actions.appendChild(add);
+      const slot = document.createElement('div');
+      slot.className = 'ov-preview';
       card.appendChild(title);
       card.appendChild(meta);
       card.appendChild(actions);
+      card.appendChild(slot);
       host.appendChild(card);
     });
   }
 
-  async function previewResult(id) {
+  async function previewResult(id, card) {
     showError($('#ov-error'), '');
-    const preview = await window.api.openversePreview(id);
-    const bytes = preview.bytes;
-    const raw = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-    const blob = new Blob([raw], { type: preview.mime || 'audio/mpeg' });
-    if (ovAudioUrl) URL.revokeObjectURL(ovAudioUrl);
-    ovAudioUrl = URL.createObjectURL(blob);
-    const player = $('#ov-player');
-    player.src = ovAudioUrl;
-    player.classList.remove('hidden');
-    await player.play();
+    const slot = card && card.querySelector('.ov-preview');
+    if (!slot) return;
+    const player = previewPlayer();
+    player.pause();
+    player.classList.add('hidden');
+    if (player.parentNode) player.parentNode.removeChild(player);
+    document.querySelectorAll('#ov-results .ov-preview').forEach((node) => {
+      if (node !== slot) node.replaceChildren();
+    });
+    slot.replaceChildren();
+    const status = document.createElement('p');
+    status.className = 'ov-preview-status';
+    status.textContent = 'Loading preview…';
+    slot.appendChild(status);
+    slot.appendChild(player);
+    try {
+      const preview = await window.api.openversePreview(id);
+      const bytes = preview.bytes;
+      const raw = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      const blob = new Blob([raw], { type: preview.mime || 'audio/mpeg' });
+      if (ovAudioUrl) URL.revokeObjectURL(ovAudioUrl);
+      ovAudioUrl = URL.createObjectURL(blob);
+      if (!slot.isConnected || player.parentNode !== slot) return;
+      player.src = ovAudioUrl;
+      player.classList.remove('hidden');
+      status.remove();
+      try {
+        await player.play();
+      } catch (err) {
+        console.error(err);
+      }
+    } catch (err) {
+      player.pause();
+      player.classList.add('hidden');
+      if (player.parentNode) player.parentNode.removeChild(player);
+      if (status.isConnected) status.remove();
+      showError($('#ov-error'), err.message || 'Openverse is unreachable. Recording and the soundboard still work offline.');
+    }
   }
 
   async function importResult(result) {
