@@ -375,9 +375,10 @@
       const data = await api(`/api/openverse/search?q=${encodeURIComponent($('#ov-query').value.trim())}&page=${page}`);
       ovPage = data.page || page;
       ovPageCount = data.pageCount || 1;
-      $('#ov-note').textContent = data.fellBack
-        ? (data.note || 'No sound_effect matches. Showing other Openverse audio.')
-        : (data.results && data.results.length ? 'Sound effects' : 'No matches.');
+      const count = data.results && data.results.length;
+      $('#ov-note').textContent = count
+        ? 'Short sound effects'
+        : (ovPage < ovPageCount ? 'No short sound effects on this page.' : 'No short sound effects.');
       renderResults(data.results || []);
       $('#ov-prev').classList.toggle('hidden', ovPage <= 1);
       $('#ov-next').classList.toggle('hidden', ovPage >= ovPageCount);
@@ -399,6 +400,13 @@
       const meta = document.createElement('p');
       meta.className = 'ov-meta';
       meta.textContent = `${result.creator} · ${result.license || 'License unknown'}`;
+      if (result.lengthLabel) {
+        meta.appendChild(document.createTextNode(' · '));
+        const length = document.createElement('span');
+        length.className = 'ov-length';
+        length.textContent = result.lengthLabel;
+        meta.appendChild(length);
+      }
       if (result.sourceUrl) {
         meta.appendChild(document.createTextNode(' · '));
         const link = document.createElement('a');

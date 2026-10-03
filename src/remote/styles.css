@@ -678,6 +678,11 @@ body {
   margin-bottom: 8px;
 }
 
+.ov-length {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .clip-actions {
   display: flex;
   gap: 6px;

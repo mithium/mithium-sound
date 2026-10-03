@@ -1,15 +1,25 @@
 // Openverse audio search. Public API, no key.
 // https://api.openverse.org/v1/audio/
 //
-// Query params confirmed from the live OpenAPI schema: q, page, page_size,
-// category (audiobook, music, news, podcast, pronunciation, sound_effect),
-// plus license, source, and others. Sound effects are requested with
-// category=sound_effect. Freesound rows are often uncategorized, so an empty
-// sound_effect page falls back to the same search without that filter.
+// Browse is for short Discord soundboard effects. category=sound_effect is
+// not usable here: Freesound (the effect library) leaves category empty, so
+// that filter returns nothing and an unfiltered follow-up was filling the
+// list with Jamendo songs and other long recordings.
+//
+// One search uses the API length band `shortest` (under 30 seconds) and
+// excludes the Jamendo music catalog. Each row already includes `category`
+// and `duration` in milliseconds. Music, podcasts, news, audiobooks,
+// pronunciations, and anything that is not a short effect are dropped from
+// the list using those fields. Nothing is downloaded just to measure length.
+// Preview and import fetch a single chosen file.
 
 const AUDIO_ROOT = 'https://api.openverse.org/v1/audio/';
 const USER_AGENT = 'MithiumSound/1.11 (soundboard)';
 const MAX_AUDIO_BYTES = 32 * 1024 * 1024;
+// Openverse indexes `shortest` as duration < 30 seconds.
+const MAX_SOUND_EFFECT_MS = 30 * 1000;
+const SOUND_EFFECT_LENGTH = 'shortest';
+const EXCLUDED_MUSIC_SOURCE = 'jamendo';
 
 class OpenverseError extends Error {
   constructor(message, offline) {
@@ -107,6 +117,26 @@ function publicPageUrl(value) {
   }
 }
 
+function formatDurationLabel(durationMs) {
+  const ms = Number(durationMs);
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  const seconds = ms / 1000;
+  if (seconds < 10) return `${(Math.round(seconds * 10) / 10).toFixed(1)}s`;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const total = Math.round(seconds);
+  const minutes = Math.floor(total / 60);
+  const remain = total % 60;
+  return `${minutes}:${String(remain).padStart(2, '0')}`;
+}
+
+function isShortSoundEffect(mapped) {
+  if (!mapped) return false;
+  const category = String(mapped.category || '').trim().toLowerCase();
+  if (category && category !== 'sound_effect') return false;
+  const duration = Number(mapped.durationMs);
+  return Number.isFinite(duration) && duration > 0 && duration < MAX_SOUND_EFFECT_MS;
+}
+
 function usableAudioUrl(row) {
   if (!row || typeof row !== 'object') return null;
   if (isDirectFileUrl(row.url)) return String(row.url);
@@ -128,6 +158,7 @@ function mapResult(row) {
   const attribution = decodeEntities(row.attribution)
     || `"${title}" by ${creator}${license ? ` is licensed under ${license}` : ''}${sourceUrl ? `. ${sourceUrl}` : ''}`;
   const duration = Number(row.duration);
+  const durationMs = Number.isFinite(duration) && duration > 0 ? Math.round(duration) : null;
   return {
     id: String(row.id || ''),
     title,
@@ -138,7 +169,8 @@ function mapResult(row) {
     attribution,
     audioUrl,
     category: row.category || null,
-    durationMs: Number.isFinite(duration) ? duration : null,
+    durationMs,
+    lengthLabel: formatDurationLabel(durationMs),
   };
 }
 
@@ -148,7 +180,7 @@ function mapSearchResults(payload) {
   for (const row of rows) {
     try {
       const mapped = mapResult(row);
-      if (mapped && mapped.id) results.push(mapped);
+      if (mapped && mapped.id && isShortSoundEffect(mapped)) results.push(mapped);
     } catch {
       // One bad row must not fail the search.
     }
@@ -161,12 +193,14 @@ function mapSearchResults(payload) {
   };
 }
 
-function buildAudioSearchUrl({ q, page = 1, pageSize = 12, category } = {}) {
+function buildAudioSearchUrl({ q, page = 1, pageSize = 12, category, length, excludedSource } = {}) {
   const params = new URLSearchParams();
   params.set('q', String(q || '').trim());
   params.set('page', String(page || 1));
   params.set('page_size', String(Math.min(20, Math.max(1, pageSize || 12))));
   if (category) params.set('category', category);
+  if (length) params.set('length', length);
+  if (excludedSource) params.set('excluded_source', excludedSource);
   return `${AUDIO_ROOT}?${params.toString()}`;
 }
 
@@ -217,18 +251,18 @@ async function searchAudio(query, { fetchImpl = fetch, page = 1, pageSize = 12 }
   const q = String(query || '').trim();
   if (!q) throw new OpenverseError('Type a search', false);
   if (q.length > 200) throw new OpenverseError('Search is too long', false);
-  const primaryUrl = buildAudioSearchUrl({ q, page, pageSize, category: 'sound_effect' });
-  const primary = mapSearchResults(await requestJson(primaryUrl, fetchImpl));
-  if (primary.results.length) {
-    return { ...primary, fellBack: false, category: 'sound_effect' };
-  }
-  const fallbackUrl = buildAudioSearchUrl({ q, page, pageSize });
-  const fallback = mapSearchResults(await requestJson(fallbackUrl, fetchImpl));
+  const url = buildAudioSearchUrl({
+    q,
+    page,
+    pageSize,
+    length: SOUND_EFFECT_LENGTH,
+    excludedSource: EXCLUDED_MUSIC_SOURCE,
+  });
+  const found = mapSearchResults(await requestJson(url, fetchImpl));
   return {
-    ...fallback,
-    fellBack: true,
-    category: null,
-    note: 'No sound_effect matches. Showing other Openverse audio.',
+    ...found,
+    fellBack: false,
+    length: SOUND_EFFECT_LENGTH,
   };
 }
 
@@ -337,9 +371,12 @@ function joinAttribution(clips) {
 module.exports = {
   AUDIO_ROOT,
   MAX_AUDIO_BYTES,
+  MAX_SOUND_EFFECT_MS,
   OpenverseError,
   decodeEntities,
   formatLicense,
+  formatDurationLabel,
+  isShortSoundEffect,
   isPrivateHost,
   assertPublicHttpUrl,
   usableAudioUrl,

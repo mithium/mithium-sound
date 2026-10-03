@@ -386,34 +386,44 @@ function doorResult(overrides) {
     });
   }
 
-  await test('search prefers category=sound_effect and skips rows with no audio URL', async () => {
+  await test('search asks for short effects and skips songs, long recordings, and rows with no file', async () => {
     const calls = [];
     const fetchImpl = async (url) => {
       calls.push(String(url));
-      if (String(url).includes('category=sound_effect')) {
-        return jsonResponse({
-          result_count: 1,
-          page: 1,
-          page_count: 1,
-          results: [
-            doorResult(),
-            { id: 'missing-audio', title: 'Nope', url: null, alt_files: [{ url: 'https://freesound.org/apiv2/sounds/1/download/' }] },
-            { id: 'private', title: 'Local', url: 'http://127.0.0.1/secret.mp3', license: 'by' },
-            { id: 'alt-only', title: 'Alt', url: '', license: 'cc0', license_version: '1.0', creator: 'Ada', foreign_landing_url: 'https://example.com/alt', alt_files: [{ url: 'https://cdn.example.com/alt.mp3' }] },
-          ],
-        });
-      }
-      throw new Error('fallback should not run when sound effects exist');
+      return jsonResponse({
+        result_count: 8,
+        page: 1,
+        page_count: 1,
+        results: [
+          doorResult(),
+          { id: 'missing-audio', title: 'Nope', duration: 800, url: null, alt_files: [{ url: 'https://freesound.org/apiv2/sounds/1/download/' }] },
+          { id: 'private', title: 'Local', duration: 800, url: 'http://127.0.0.1/secret.mp3', license: 'by' },
+          { id: 'alt-only', title: 'Alt', url: '', duration: 800, license: 'cc0', license_version: '1.0', creator: 'Ada', foreign_landing_url: 'https://example.com/alt', alt_files: [{ url: 'https://cdn.example.com/alt.mp3' }] },
+          doorResult({ id: 'sfx-categorized', title: 'Click', category: 'sound_effect', duration: 2200, url: 'https://cdn.example.com/click.mp3' }),
+          doorResult({ id: 'song-row', title: 'Love Song', category: 'music', duration: 12000, url: 'https://cdn.example.com/song.mp3' }),
+          doorResult({ id: 'podcast-row', title: 'Podcast Hour', category: 'podcast', duration: 255000, url: 'https://cdn.example.com/pod.mp3' }),
+          doorResult({ id: 'pron-row', title: 'En-uk-door', category: 'pronunciation', duration: 900, url: 'https://cdn.example.com/pron.mp3' }),
+          doorResult({ id: 'long-row', title: 'Long take', category: null, duration: 180000, url: 'https://cdn.example.com/long.mp3' }),
+          doorResult({ id: 'news-row', title: 'News sting', category: 'news', duration: 4000, url: 'https://cdn.example.com/news.mp3' }),
+          doorResult({ id: 'book-row', title: 'Chapter', category: 'audiobook', duration: 8000, url: 'https://cdn.example.com/book.mp3' }),
+          doorResult({ id: 'unknown-length', title: 'No length', category: null, duration: null, url: 'https://cdn.example.com/nolength.mp3' }),
+        ],
+      });
     };
     const found = await openverse.searchAudio('door', { fetchImpl });
     assert.strictEqual(found.fellBack, false);
-    assert.strictEqual(found.category, 'sound_effect');
+    assert.strictEqual(found.length, 'shortest');
+    assert.strictEqual(calls.length, 1);
     assert.ok(calls[0].startsWith('https://api.openverse.org/v1/audio/?'));
-    assert.ok(calls[0].includes('category=sound_effect'));
+    assert.ok(calls[0].includes('length=shortest'));
+    assert.ok(calls[0].includes('excluded_source=jamendo'));
+    assert.ok(!calls[0].includes('category='));
     assert.ok(calls[0].includes('q=door'));
+    assert.ok(calls.every((href) => !href.includes('cdn.freesound.org') && !href.includes('cdn.example.com')));
     assert.deepStrictEqual(found.results.map((row) => row.id), [
       'a8682111-e459-4fa3-9802-4e97e534487f',
       'alt-only',
+      'sfx-categorized',
     ]);
     const door = found.results[0];
     assert.strictEqual(door.license, 'CC BY 4.0');
@@ -422,31 +432,47 @@ function doorResult(overrides) {
     assert.strictEqual(door.sourceUrl, 'https://freesound.org/people/bennstir/sounds/80929');
     assert.ok(door.attribution.includes('CC BY 4.0'));
     assert.strictEqual(door.audioUrl, 'https://cdn.freesound.org/previews/80/80929_16052-hq.mp3');
+    assert.strictEqual(door.durationMs, 1400);
+    assert.strictEqual(door.lengthLabel, '1.4s');
     assert.strictEqual(found.results[1].license, 'CC0 1.0');
     assert.strictEqual(found.results[1].audioUrl, 'https://cdn.example.com/alt.mp3');
+    assert.strictEqual(found.results[1].lengthLabel, '0.8s');
+    assert.strictEqual(found.results[2].lengthLabel, '2.2s');
+    assert.strictEqual(found.results[2].category, 'sound_effect');
   });
 
-  await test('empty sound_effect page falls back without failing the search', async () => {
+  await test('a page of songs is not shown as sound effects', async () => {
     const calls = [];
     const fetchImpl = async (url) => {
       calls.push(String(url));
-      if (String(url).includes('category=sound_effect')) {
-        return jsonResponse({ result_count: 0, page: 1, page_count: 0, results: [] });
-      }
       return jsonResponse({
         result_count: 1,
-        page: 1,
-        page_count: 1,
-        results: [doorResult({ creator: 'Bessonn&amp;sa', category: 'music' })],
+        page: 2,
+        page_count: 3,
+        results: [doorResult({ creator: 'Bessonn&amp;sa', category: 'music', duration: 210000 })],
       });
     };
     const found = await openverse.searchAudio('applause', { fetchImpl, page: 2 });
-    assert.strictEqual(found.fellBack, true);
-    assert.strictEqual(calls.length, 2);
-    assert.ok(!calls[1].includes('category='));
-    assert.ok(calls[1].includes('page=2'));
-    assert.strictEqual(found.results[0].creator, 'Bessonn&sa');
-    assert.strictEqual(found.results[0].license, 'CC BY 4.0');
+    assert.strictEqual(found.fellBack, false);
+    assert.strictEqual(calls.length, 1);
+    assert.ok(calls[0].includes('length=shortest'));
+    assert.ok(calls[0].includes('excluded_source=jamendo'));
+    assert.ok(calls[0].includes('page=2'));
+    assert.deepStrictEqual(found.results, []);
+  });
+
+  await test('length labels come from duration metadata', () => {
+    assert.strictEqual(openverse.formatDurationLabel(1400), '1.4s');
+    assert.strictEqual(openverse.formatDurationLabel(6385), '6.4s');
+    assert.strictEqual(openverse.formatDurationLabel(18438), '18s');
+    assert.strictEqual(openverse.formatDurationLabel(90000), '1:30');
+    assert.strictEqual(openverse.formatDurationLabel(0), '');
+    assert.strictEqual(openverse.formatDurationLabel(-1012), '');
+    const mapped = openverse.mapResult(doorResult({ duration: -1012 }));
+    assert.strictEqual(mapped.durationMs, null);
+    assert.strictEqual(mapped.lengthLabel, '');
+    assert.strictEqual(openverse.isShortSoundEffect(mapped), false);
+    assert.strictEqual(openverse.isShortSoundEffect(openverse.mapResult(doorResult())), true);
   });
 
   await test('a down network is an offline error, not an empty board', async () => {
