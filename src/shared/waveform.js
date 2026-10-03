@@ -12,7 +12,7 @@
     if (canvas.height !== height) canvas.height = height;
   }
 
-  function drawWaveform(canvas, peaks, markerRatio, selection) {
+  function drawWaveform(canvas, peaks, markerRatio, selection, playheadRatio) {
     fitCanvas(canvas);
     const ctx = canvas.getContext('2d');
     const width = canvas.width;
@@ -49,6 +49,16 @@
       const x = Math.max(0, Math.min(1, Number(markerRatio))) * width;
       ctx.strokeStyle = '#f9e2af';
       ctx.lineWidth = Math.max(2, Math.round(width / 400));
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+
+    if (playheadRatio != null && Number.isFinite(Number(playheadRatio))) {
+      const x = Math.max(0, Math.min(1, Number(playheadRatio))) * width;
+      ctx.strokeStyle = '#cdd6f4';
+      ctx.lineWidth = Math.max(2, Math.round(width / 280));
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, height);

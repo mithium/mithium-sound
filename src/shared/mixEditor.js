@@ -9,6 +9,7 @@
     if (!mix || !waveApi || !wave || !trackList) return;
 
     const session = mix.createMixSession();
+    const history = mix.createEditHistory(10);
     const sources = new Map();
     let recording = false;
     let recordMode = 'take';
@@ -22,6 +23,8 @@
     let sourceSerial = 1;
     let selection = null;
     let drag = null;
+    let playClock = null;
+    let playRaf = 0;
 
     function status(text) {
       const el = $('#rec-status');
@@ -62,6 +65,56 @@
       return out;
     }
 
+    function remember() {
+      history.note(session);
+      updateHistoryButtons();
+    }
+
+    function updateHistoryButtons() {
+      const undoBtn = $('#edit-undo');
+      const redoBtn = $('#edit-redo');
+      if (undoBtn) undoBtn.disabled = !history.canUndo();
+      if (redoBtn) redoBtn.disabled = !history.canRedo();
+    }
+
+    function playheadRatio() {
+      if (!playClock) return null;
+      var elapsed;
+      if (playClock.ctx && playClock.ctx.state === 'running') {
+        elapsed = (playClock.ctx.currentTime - playClock.origin) * 1000;
+      } else if (playClock.started != null) {
+        elapsed = root.performance.now() - playClock.started;
+      } else {
+        return null;
+      }
+      var timeline = mix.sessionDurationMs(session) || playClock.durationMs || 1;
+      if (elapsed >= playClock.durationMs) {
+        playClock = null;
+        return null;
+      }
+      return Math.max(0, Math.min(timeline, elapsed)) / timeline;
+    }
+
+    function stopPlayhead() {
+      playClock = null;
+      if (playRaf) root.cancelAnimationFrame(playRaf);
+      playRaf = 0;
+    }
+
+    function tickPlayhead() {
+      paint();
+      if (!playClock) return;
+      playRaf = root.requestAnimationFrame(tickPlayhead);
+    }
+
+    function startPlayhead(durationMs, ctx, origin) {
+      stopPlayhead();
+      playClock = ctx
+        ? { ctx: ctx, origin: origin, durationMs: durationMs }
+        : { started: root.performance.now(), durationMs: durationMs };
+      tickPlayhead();
+    }
+
     function selectionRatios(trackId) {
       const duration = mix.sessionDurationMs(session);
       if (!selection || selection.trackId !== trackId || !duration) return null;
@@ -70,17 +123,26 @@
 
     function paint() {
       const duration = mix.sessionDurationMs(session);
-      waveApi.drawWaveform(
-        wave,
-        trackPeaks(session.tracks[0]),
-        recording ? null : markerRatio(),
-        selectionRatios('voice')
-      );
+      const head = playheadRatio();
+      const voice = mix.voiceTrack(session);
+      wave.classList.toggle('hidden', !voice);
+      const voiceBar = $('#voice-track-bar');
+      if (voiceBar) voiceBar.classList.toggle('hidden', !voice);
+      if (voice) {
+        waveApi.drawWaveform(
+          wave,
+          trackPeaks(voice),
+          recording ? null : markerRatio(),
+          selectionRatios(voice.id),
+          head
+        );
+      }
       trackList.querySelectorAll('canvas[data-track-id]').forEach(function (canvas) {
         const track = session.tracks.find(function (item) { return item.id === canvas.dataset.trackId; });
         if (!track) return;
-        waveApi.drawWaveform(canvas, trackPeaks(track), markerRatio(), selectionRatios(track.id));
+        waveApi.drawWaveform(canvas, trackPeaks(track), markerRatio(), selectionRatios(track.id), head);
       });
+      placeDeleteButton();
       const label = $('#rec-marker');
       if (label) {
         const clock = root.MithiumEdit ? root.MithiumEdit.formatMs(session.markerMs) : String(session.markerMs);
@@ -99,8 +161,20 @@
       if (saveBtn) saveBtn.disabled = mix.mixClips(session, false).length === 0;
       const addBtn = $('#add-track');
       if (addBtn) addBtn.disabled = session.tracks.length >= mix.MAX_TRACKS;
-      const deleteBtn = $('#delete-section');
-      if (deleteBtn) deleteBtn.disabled = !(selection && selection.endMs > selection.startMs);
+    }
+
+    function placeDeleteButton() {
+      const btn = $('#delete-section');
+      if (!btn) return;
+      const show = !!(selection && selection.endMs > selection.startMs);
+      btn.classList.toggle('hidden', !show);
+      btn.disabled = !show;
+      if (!show) return;
+      const voice = mix.voiceTrack(session);
+      const anchor = voice && selection.trackId === voice.id
+        ? wave
+        : trackList.querySelector('canvas[data-track-id="' + selection.trackId + '"]');
+      if (anchor && anchor.nextSibling !== btn) anchor.insertAdjacentElement('afterend', btn);
     }
 
     function redraw() {
@@ -203,6 +277,7 @@
           remove.type = 'button';
           remove.textContent = 'Remove';
           remove.addEventListener('click', function () {
+            remember();
             mix.removeClip(session, track.id, clip.uid);
             redraw();
           });
@@ -213,26 +288,29 @@
         section.appendChild(title);
         section.appendChild(canvas);
         section.appendChild(lane);
+        const actions = document.createElement('div');
+        actions.className = 'studio-inline';
         if (track.kind === 'extra') {
-          const actions = document.createElement('div');
-          actions.className = 'studio-inline';
           const place = document.createElement('button');
           place.type = 'button';
           place.textContent = 'Place at point';
           place.addEventListener('click', function () {
             placeOn(track.id).catch(function (err) { showError(err.message); });
           });
-          const drop = document.createElement('button');
-          drop.type = 'button';
-          drop.textContent = 'Remove track';
-          drop.addEventListener('click', function () {
-            mix.removeTrack(session, track.id);
-            redraw();
-          });
           actions.appendChild(place);
-          actions.appendChild(drop);
-          section.appendChild(actions);
         }
+        const drop = document.createElement('button');
+        drop.type = 'button';
+        drop.textContent = 'Delete track';
+        drop.addEventListener('click', function () {
+          remember();
+          mix.removeTrack(session, track.id);
+          if (selection && selection.trackId === track.id) selection = null;
+          showError('');
+          redraw();
+        });
+        actions.appendChild(drop);
+        section.appendChild(actions);
         section.appendChild(list);
         trackList.appendChild(section);
       });
@@ -285,7 +363,8 @@
       showError('');
       recordMode = mode === 'punch' ? 'punch' : 'take';
       punchAt = recordMode === 'punch' ? Math.max(0, Math.round(session.markerMs || 0)) : 0;
-      if (recordMode === 'punch' && !session.tracks[0].clips.length && punchAt === 0) {
+      const existingVoice = mix.voiceTrack(session);
+      if (recordMode === 'punch' && (!existingVoice || !existingVoice.clips.length) && punchAt === 0) {
         recordMode = 'take';
       }
       if (playContext) {
@@ -349,6 +428,7 @@
       const decoded = await decodeBlob(blob);
       const key = (recordMode === 'punch' ? 'punch-' : 'take-') + (sourceSerial += 1);
       await rememberSource(key, blob, decoded);
+      remember();
       if (recordMode === 'punch') mix.punchVoice(session, punchAt, key, decoded.durationMs);
       else mix.setVoiceTake(session, key, decoded.durationMs);
       const name = $('#edit-name');
@@ -361,7 +441,8 @@
       const select = $('#edit-insert');
       const clipId = select ? Number(select.value) : 0;
       if (!clipId) throw new Error('Choose a clip to place');
-      if (!mix.sessionDurationMs(session) && session.markerMs === 0 && !session.tracks[0].clips.length) {
+      const voiceNow = mix.voiceTrack(session);
+      if (!mix.sessionDurationMs(session) && session.markerMs === 0 && (!voiceNow || !voiceNow.clips.length)) {
         throw new Error('Record a voice take first, then click where the effect should sit.');
       }
       const sound = host.sounds().find(function (item) { return Number(item.id) === clipId; });
@@ -373,7 +454,12 @@
         await rememberSource(key, blob, decoded, { clipId: clipId });
       }
       const src = sources.get(key);
-      mix.placeClip(session, trackId, {
+      remember();
+      var targetId = trackId;
+      if (!session.tracks.some(function (item) { return item.id === targetId; })) {
+        targetId = mix.effectsTrack(session, true).id;
+      }
+      mix.placeClip(session, targetId, {
         clipId: clipId,
         name: sound ? sound.name : 'Clip',
         startMs: session.markerMs || 0,
@@ -412,13 +498,24 @@
       };
     }
 
+    function clipsDuration(clips) {
+      var max = 0;
+      clips.forEach(function (clip) {
+        var end = Number(clip.startMs) + Number(clip.durationMs || 0);
+        if (end > max) max = end;
+      });
+      return max;
+    }
+
     async function play(voiceOnly) {
       const clips = mix.mixClips(session, voiceOnly);
       if (!clips.length) throw new Error(voiceOnly ? 'Record a voice take first.' : 'Nothing to play yet.');
+      const durationMs = clipsDuration(clips);
       if (!host.preferLocalPreview()) {
         if (playContext) playContext.close().catch(function () {});
         playContext = null;
         await host.playThroughWindows(await payloadFor(clips));
+        startPlayhead(durationMs);
         status(voiceOnly ? 'Playing voice on Windows' : 'Playing mix on Windows');
         return;
       }
@@ -434,6 +531,7 @@
         node.connect(playContext.destination);
         node.start(when + clip.startMs / 1000, (clip.offsetMs || 0) / 1000, clip.durationMs / 1000);
       });
+      startPlayhead(durationMs, playContext, when);
       status(voiceOnly ? 'Playing voice' : 'Playing mix');
     }
 
@@ -487,10 +585,11 @@
     });
     $('#place-effect').addEventListener('click', function () {
       const effects = mix.effectsTrack(session);
-      placeOn(effects.id).catch(function (err) { showError(err.message); });
+      placeOn(effects ? effects.id : 'effects').catch(function (err) { showError(err.message); });
     });
     $('#add-track').addEventListener('click', function () {
       try {
+        remember();
         mix.addExtraTrack(session);
         showError('');
         redraw();
@@ -498,6 +597,66 @@
         showError(err.message);
       }
     });
+    const undoBtn = $('#edit-undo');
+    if (undoBtn) {
+      undoBtn.addEventListener('click', function () {
+        if (!history.undo(session)) return;
+        selection = null;
+        showError('');
+        updateHistoryButtons();
+        redraw();
+      });
+    }
+    const redoBtn = $('#edit-redo');
+    if (redoBtn) {
+      redoBtn.addEventListener('click', function () {
+        if (!history.redo(session)) return;
+        selection = null;
+        showError('');
+        updateHistoryButtons();
+        redraw();
+      });
+    }
+    const cancelBtn = $('#edit-cancel');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', function () {
+        if (recording && recorder && recorder.state !== 'inactive') {
+          recording = false;
+          try { recorder.stop(); } catch (err) { /* already stopped */ }
+        }
+        stopMeter();
+        stopPlayhead();
+        if (playContext) playContext.close().catch(function () {});
+        playContext = null;
+        const fresh = mix.createMixSession();
+        session.markerMs = 0;
+        session.tracks = fresh.tracks;
+        selection = null;
+        sources.clear();
+        history.clear();
+        updateHistoryButtons();
+        $('#rec-start').disabled = false;
+        $('#rec-stop').disabled = true;
+        const punchButton = $('#rec-punch');
+        if (punchButton) punchButton.disabled = false;
+        showError('');
+        status('Ready');
+        redraw();
+        if (host.leaveEditor) host.leaveEditor();
+      });
+    }
+    const deleteVoiceBtn = $('#delete-voice-track');
+    if (deleteVoiceBtn) {
+      deleteVoiceBtn.addEventListener('click', function () {
+        const voice = mix.voiceTrack(session);
+        if (!voice) return;
+        remember();
+        mix.removeTrack(session, voice.id);
+        if (selection && selection.trackId === voice.id) selection = null;
+        showError('');
+        redraw();
+      });
+    }
     $('#edit-render').addEventListener('click', function () {
       const button = $('#edit-render');
       button.disabled = true;
@@ -522,6 +681,7 @@
           return;
         }
         try {
+          remember();
           mix.deleteRange(session, selection.trackId, selection.startMs, selection.endMs);
           selection = null;
           showError('');
@@ -533,10 +693,12 @@
     }
 
     root.mithiumStopMixPreview = function () {
+      stopPlayhead();
       if (playContext) {
         playContext.close().catch(function () {});
         playContext = null;
       }
+      paint();
     };
     root.mithiumLoadVoice = function (id) {
       loadLibraryVoice(id).catch(function (err) { showError(err.message); });

@@ -28,12 +28,23 @@
     return max;
   }
 
-  function voiceTrack(session) {
-    return session.tracks[0];
+  function voiceTrack(session, create) {
+    var found = (session.tracks || []).find(function (track) { return track.kind === 'voice'; });
+    if (found || !create) return found || null;
+    if (session.tracks.length >= MAX_TRACKS) throw new Error('Ten tracks is the limit');
+    var voice = { id: 'voice', name: 'Voice', kind: 'voice', clips: [] };
+    session.tracks.unshift(voice);
+    return voice;
   }
 
-  function effectsTrack(session) {
-    return session.tracks.find(function (track) { return track.kind === 'effects'; });
+  function effectsTrack(session, create) {
+    var found = (session.tracks || []).find(function (track) { return track.kind === 'effects'; });
+    if (found || !create) return found || null;
+    if (session.tracks.length >= MAX_TRACKS) throw new Error('Ten tracks is the limit');
+    var track = { id: 'effects', name: 'Sound effects', kind: 'effects', clips: [] };
+    var voiceIndex = session.tracks.findIndex(function (item) { return item.kind === 'voice'; });
+    session.tracks.splice(voiceIndex + 1, 0, track);
+    return track;
   }
 
   function addExtraTrack(session) {
@@ -52,15 +63,53 @@
 
   function removeTrack(session, trackId) {
     var track = (session.tracks || []).find(function (item) { return item.id === trackId; });
-    if (!track || track.kind !== 'extra') throw new Error('Only an extra track can be removed');
+    if (!track) throw new Error('That track is not on screen');
     session.tracks = session.tracks.filter(function (item) { return item.id !== trackId; });
+  }
+
+  function createEditHistory(limit) {
+    var cap = limit || 10;
+    var undo = [];
+    var redo = [];
+    function snapshot(session) {
+      return JSON.parse(JSON.stringify({
+        markerMs: session.markerMs || 0,
+        tracks: session.tracks || [],
+      }));
+    }
+    function apply(session, snap) {
+      session.markerMs = snap.markerMs || 0;
+      session.tracks = snap.tracks;
+    }
+    return {
+      note: function (session) {
+        undo.push(snapshot(session));
+        if (undo.length > cap) undo.shift();
+        redo.length = 0;
+      },
+      undo: function (session) {
+        if (!undo.length) return false;
+        redo.push(snapshot(session));
+        apply(session, undo.pop());
+        return true;
+      },
+      redo: function (session) {
+        if (!redo.length) return false;
+        undo.push(snapshot(session));
+        apply(session, redo.pop());
+        return true;
+      },
+      canUndo: function () { return undo.length > 0; },
+      canRedo: function () { return redo.length > 0; },
+      clear: function () { undo.length = 0; redo.length = 0; },
+    };
   }
 
   function setVoiceTake(session, sourceKey, durationMs) {
     var length = Math.round(Number(durationMs));
     if (!sourceKey) throw new Error('The voice take has no audio');
     if (!Number.isFinite(length) || length <= 0) throw new Error('The voice take has no length');
-    voiceTrack(session).clips = [{
+    voiceTrack(session, true).clips = [{
       uid: 'voice-' + sourceKey,
       sourceKey: sourceKey,
       startMs: 0,
@@ -74,7 +123,7 @@
     var length = Math.round(Number(durationMs));
     if (!sourceKey) throw new Error('The punch-in has no audio');
     if (!Number.isFinite(length) || length <= 0) throw new Error('The punch-in has no length');
-    var voice = voiceTrack(session);
+    var voice = voiceTrack(session, true);
     if (!voice.clips.length) {
       voice.clips = [{
         uid: 'voice-' + sourceKey,
@@ -213,8 +262,10 @@
     MAX_TRACKS: MAX_TRACKS,
     createMixSession: createMixSession,
     sessionDurationMs: sessionDurationMs,
+    voiceTrack: voiceTrack,
     addExtraTrack: addExtraTrack,
     removeTrack: removeTrack,
+    createEditHistory: createEditHistory,
     setVoiceTake: setVoiceTake,
     punchVoice: punchVoice,
     placeClip: placeClip,

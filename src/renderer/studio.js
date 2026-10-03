@@ -420,6 +420,10 @@ function startDesktopStudio() {
       saveMix: async (payload) => (await window.api.clipMix(payload)).sound,
       onSaved: async () => { if (window.mithiumRefresh) await window.mithiumRefresh(); },
       playThroughWindows: async () => {},
+      leaveEditor: () => {
+        const tab = document.querySelector('.tab[data-tab="sounds"]');
+        if (tab) tab.click();
+      },
     });
   }
 
