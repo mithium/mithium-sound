@@ -1,10 +1,12 @@
 // Loaded-clip hotkey decisions. No Electron, no Windows key injection.
 //
 // V and T play the phone-loaded clip from start to finish.
-// When auto-hold is on (the default), the matching key is treated as held
-// until the clip ends or a hard stop releases it. Physical keyup does not
-// stop playback; the caller re-asserts the key-down so Windows stays held.
-// Hard stop is Delete, the Windows Stop button, or Stop on the phone remote.
+// When auto-hold is on (the default), one press is enough: the physical
+// key-up is swallowed and the caller injects a fresh key-down after the
+// hook returns, so the key stays down until the clip ends. Injecting during
+// the key-up hook loses, because that physical key-up is delivered afterward
+// and clears the key. Hard stop is Delete, the Windows Stop button, or Stop
+// on the phone remote. Auto-hold off plays the clip and does not hold a key.
 
 function createController(initial = {}) {
   let loadedId = normalizeId(initial.loadedId);
@@ -52,7 +54,9 @@ function createController(initial = {}) {
       return { type: 'release-ack', key };
     }
     if (autoHold && simulatedKey === key) {
-      return { type: 'reassert', key };
+      // swallow: the global hook must eat this physical key-up. The service
+      // injects the replacement key-down only after that hook has returned.
+      return { type: 'reassert', key, swallow: true };
     }
     if (loadedId == null) return { type: 'legacy', key };
     return { type: 'ignore', key };
@@ -98,6 +102,11 @@ function normalizeId(id) {
   return number;
 }
 
+function hookSwallowResult(decision) {
+  if (decision && decision.swallow) return true;
+  return undefined;
+}
+
 function classifyGlobalEvent(event) {
   if (!event || typeof event !== 'object') return null;
   const name = event.name || '';
@@ -115,5 +124,6 @@ function classifyGlobalEvent(event) {
 module.exports = {
   createController,
   classifyGlobalEvent,
+  hookSwallowResult,
   normalizeId,
 };

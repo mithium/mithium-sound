@@ -1815,6 +1815,8 @@ document.addEventListener('keyup', async (e) => {
   e.preventDefault();
 
   const decision = await window.api.loadedClipKeyUp(key);
+  // reassert keeps the clip playing and asks main to hold the key.
+  // Only the legacy armed-clip path stops when the physical key comes up.
   if (!decision || decision.type === 'legacy') handleLegacyKeyUp(key);
 });
 
