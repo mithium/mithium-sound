@@ -180,7 +180,7 @@ $('#refresh-devices-btn').addEventListener('click', async () => {
 async function loadSettings() {
   const s = await window.api.settingsGet();
   $('#setting-token').value = s.botToken || '';
-  $('#setting-ytdlp').value = s.ytdlpPath || 'yt-dlp';
+  $('#setting-ytdlp').value = window.MithiumYtdlpPath.customPathForSettings(s.ytdlpPath);
   $('#setting-ffmpeg').value = s.ffmpegPath || 'ffmpeg';
   $('#setting-autoconnect').checked = s.autoConnect || false;
   $('#setting-hold-to-play').checked = s.holdToPlayMode || false;
@@ -207,7 +207,7 @@ async function loadSettings() {
 async function autoSaveSettings() {
   const data = {
     botToken: $('#setting-token').value,
-    ytdlpPath: $('#setting-ytdlp').value,
+    ytdlpPath: window.MithiumYtdlpPath.customPathForSettings($('#setting-ytdlp').value),
     ffmpegPath: $('#setting-ffmpeg').value,
     autoConnect: $('#setting-autoconnect').checked,
     holdToPlayMode: $('#setting-hold-to-play').checked,
@@ -1238,8 +1238,11 @@ async function probeUrl(url, token) {
     if (token !== probeToken) return;
     durationState = 'failed';
     applyFallbackClamp();
-    ytTrimHint.textContent = "Couldn't read duration — range limited to 0:30";
-    console.error('Duration probe failed:', err && err.message ? err.message : err);
+    const detail = youtubeErrorText(err);
+    ytTrimHint.textContent = detail
+      ? `Couldn't read duration — range limited to 0:30. ${detail}`
+      : "Couldn't read duration — range limited to 0:30";
+    console.error('Duration probe failed:', detail);
   }
 }
 
@@ -1349,6 +1352,10 @@ function commitText(prefer) {
 ytStart.addEventListener('blur', () => commitText('start'));
 ytEnd.addEventListener('blur', () => commitText('end'));
 
+function youtubeErrorText(err) {
+  return window.MithiumIpcError.userFacingIpcError(err);
+}
+
 // --- YouTube Extraction ---
 $('#yt-extract-btn').addEventListener('click', async () => {
   commitText('start');
@@ -1390,7 +1397,7 @@ $('#yt-extract-btn').addEventListener('click', async () => {
     $$('.tab')[0].classList.add('active');
     $('#tab-sounds').classList.add('active');
   } catch (err) {
-    errEl.textContent = err.message;
+    errEl.textContent = youtubeErrorText(err);
     errEl.classList.remove('hidden');
     progress.classList.add('hidden');
   }

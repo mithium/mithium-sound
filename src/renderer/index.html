@@ -219,7 +219,7 @@
       </div>
       <details class="setup-guide">
         <summary>Advanced: Override bundled tools</summary>
-        <p style="margin: 8px 0; color: var(--text-muted);">yt-dlp and FFmpeg are bundled with the app. Only change these if you want to use a different version.</p>
+        <p style="margin: 8px 0; color: var(--text-muted);">yt-dlp and FFmpeg come with the app. Leave a path blank to use that copy. A path you type is used instead. The bundled yt-dlp is the official unmodified Windows build, under the Unlicense, with its license and third-party notices installed beside yt-dlp.exe.</p>
         <div class="form-group">
           <label for="setting-ytdlp">yt-dlp Path</label>
           <input type="text" id="setting-ytdlp" placeholder="(bundled)">
@@ -445,6 +445,8 @@
     </div>
   </div>
 
+  <script src="../shared/ytdlpPath.js"></script>
+  <script src="../shared/ipcError.js"></script>
   <script src="../shared/lengthCap.js"></script>
   <script src="../shared/editPlan.js"></script>
   <script src="../shared/mixSession.js"></script>

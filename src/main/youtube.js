@@ -1,4 +1,5 @@
 const { spawn } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 const { isYoutubeUrl } = require('../renderer/timecode');
 
@@ -18,8 +19,74 @@ function validateTimestamps(start, end) {
   return { startSec: s, endSec: e };
 }
 
+function ytdlpLooksLikeFile(ytdlpPath) {
+  return path.isAbsolute(ytdlpPath) || ytdlpPath.includes('/') || ytdlpPath.includes('\\');
+}
+
+function missingYtdlpMessage(ytdlpPath) {
+  const shown = ytdlpPath || 'yt-dlp';
+  return `Couldn't find the YouTube downloader at "${shown}". Reinstall Mithium Sound, or set a yt-dlp path in Settings.`;
+}
+
+function ytdlpTimeoutMessage() {
+  return "Couldn't reach YouTube in time. Check your internet connection and try again.";
+}
+
+function explainYtdlpFailure(stderr) {
+  const text = String(stderr || '');
+  if (/sign in to confirm|not a bot|aren'?t a bot|are not a bot|captcha|bot check/i.test(text)) {
+    return 'YouTube blocked this download because it thinks the app is a bot. Try again later, or set a yt-dlp path in Settings that can use your browser login.';
+  }
+  if (/timed out|timeout|etimedout|econnreset|econnrefused|enotfound|enetunreach|eai_again|getaddrinfo|unable to download webpage|unable to download api page|urlopen error|network is unreachable|temporary failure in name resolution|name or service not known|nodename nor servname|connection aborted|connection reset|failed to establish a new connection|certificate verify failed/i.test(text)) {
+    return "Couldn't reach YouTube. Check your internet connection and try again.";
+  }
+  if (/http error 403|403:\s*forbidden|http error 429|too many requests/i.test(text)) {
+    return 'YouTube refused the download. Try again later.';
+  }
+  if (/private video|video unavailable|video is unavailable|has been removed|copyright claim|members-only|this video is not available/i.test(text)) {
+    return "This video isn't available to download.";
+  }
+  if (/sign in|age-restricted|age restricted|confirm your age|cookies/i.test(text)) {
+    return 'This video needs a YouTube sign-in, and the download still failed. Try a different video, or set a yt-dlp path in Settings.';
+  }
+  return "Couldn't download that clip from YouTube. Try again in a little while.";
+}
+
+function shouldRetryWithCookies(stderr) {
+  const text = String(stderr || '');
+  // "age" alone also matches the word "page", so keep this to real sign-in failures.
+  if (/sign in to confirm|not a bot|captcha|bot check/i.test(text)) return true;
+  if (/age[-\s]?restricted|confirm your age|inappropriate for some audiences/i.test(text)) return true;
+  if (/\bsign in\b|\blog in\b|--cookies|cookies-from-browser/i.test(text)) return true;
+  return false;
+}
+
+function throwYtdlpFailure(stderr) {
+  const message = explainYtdlpFailure(stderr);
+  console.error('yt-dlp failed:', String(stderr || '').slice(-2000));
+  const err = new Error(message);
+  err.ytdlpStderr = String(stderr || '');
+  throw err;
+}
+
+function ensureYtdlp(ytdlpPath) {
+  const value = String(ytdlpPath || '').trim();
+  if (!value || (ytdlpLooksLikeFile(value) && !fs.existsSync(value))) {
+    throw new Error(missingYtdlpMessage(value));
+  }
+  return value;
+}
+
 function runYtdlp({ url, start, end, outputPath, ytdlpPath, ffmpegDir, cookiesBrowser, onProgress }) {
   return new Promise((resolve, reject) => {
+    let bin;
+    try {
+      bin = ensureYtdlp(ytdlpPath);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+
     const args = [
       '-x',
       '--audio-format', 'mp3',
@@ -40,9 +107,9 @@ function runYtdlp({ url, start, end, outputPath, ytdlpPath, ffmpegDir, cookiesBr
 
     args.push(url);
 
-    console.log('Spawning yt-dlp:', ytdlpPath, args.join(' '));
+    console.log('Spawning yt-dlp:', bin, args.join(' '));
 
-    const proc = spawn(ytdlpPath, args, { windowsHide: true });
+    const proc = spawn(bin, args, { windowsHide: true });
     let stderr = '';
 
     proc.stderr.on('data', (data) => {
@@ -73,34 +140,33 @@ function runYtdlp({ url, start, end, outputPath, ytdlpPath, ffmpegDir, cookiesBr
     });
 
     proc.on('error', (err) => {
+      console.error('yt-dlp spawn error:', err.message);
       if (err.code === 'ENOENT') {
-        reject(new Error(`yt-dlp not found at "${ytdlpPath}". Install it or set the path in settings.`));
+        reject(new Error(missingYtdlpMessage(bin)));
       } else {
-        reject(err);
+        reject(new Error("The YouTube downloader couldn't start. Reinstall Mithium Sound, or set a yt-dlp path in Settings."));
       }
     });
   });
 }
 
-async function extractClip({ url, start, end, outputPath, ytdlpPath = 'yt-dlp', ffmpegDir, onProgress }) {
+async function extractClip({ url, start, end, outputPath, ytdlpPath, ffmpegDir, onProgress }) {
   validateTimestamps(start, end);
 
   // First attempt without cookies
   const first = await runYtdlp({ url, start, end, outputPath, ytdlpPath, ffmpegDir, onProgress });
   if (first.success) return outputPath;
 
-  // Check if it's an age-restriction / sign-in error
-  const needsCookies = /sign in|age|cookies/i.test(first.stderr);
-  if (!needsCookies) {
-    throw new Error(`yt-dlp exited with code 1: ${first.stderr.slice(-500)}`);
+  // Age gates and YouTube's bot check both ask for a browser login.
+  if (!shouldRetryWithCookies(first.stderr)) {
+    throwYtdlpFailure(first.stderr);
   }
 
-  // Retry with Chrome cookies
-  console.log('Age-restricted video detected, retrying with Chrome cookies...');
+  console.log('Sign-in required, retrying with Chrome cookies...');
   const retry = await runYtdlp({ url, start, end, outputPath, ytdlpPath, ffmpegDir, cookiesBrowser: 'chrome', onProgress });
   if (retry.success) return outputPath;
 
-  throw new Error(`yt-dlp exited with code 1: ${retry.stderr.slice(-500)}`);
+  throwYtdlpFailure(`${first.stderr || ''}\n${retry.stderr || ''}`);
 }
 
 function parseDurationOutput(stdout) {
@@ -117,7 +183,15 @@ let activeProbe = null;
 
 function runYtdlpCapture(ytdlpPath, args, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ytdlpPath, args, { windowsHide: true });
+    let bin;
+    try {
+      bin = ensureYtdlp(ytdlpPath);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+
+    const proc = spawn(bin, args, { windowsHide: true });
     activeProbe = proc;
     let stdout = '';
     let stderr = '';
@@ -139,10 +213,11 @@ function runYtdlpCapture(ytdlpPath, args, timeoutMs) {
     proc.stdout.on('data', (data) => { stdout += data.toString(); });
     proc.stderr.on('data', (data) => { stderr += data.toString(); });
     proc.on('error', (err) => {
+      console.error('yt-dlp spawn error:', err.message);
       if (err.code === 'ENOENT') {
-        finish(reject, new Error(`yt-dlp not found at "${ytdlpPath}". Install it or set the path in settings.`));
+        finish(reject, new Error(missingYtdlpMessage(bin)));
       } else {
-        finish(reject, err);
+        finish(reject, new Error("The YouTube downloader couldn't start. Reinstall Mithium Sound, or set a yt-dlp path in Settings."));
       }
     });
     proc.on('close', (code, signal) => {
@@ -158,7 +233,7 @@ function durationArgs(url, cookiesBrowser) {
   return args;
 }
 
-async function probeDuration({ url, ytdlpPath = 'yt-dlp', timeoutMs = 25000 }) {
+async function probeDuration({ url, ytdlpPath, timeoutMs = 25000 }) {
   if (typeof url !== 'string' || !url.trim()) {
     throw new Error('Missing YouTube URL');
   }
@@ -185,7 +260,7 @@ async function probeDuration({ url, ytdlpPath = 'yt-dlp', timeoutMs = 25000 }) {
       throw err;
     }
     if (result.timedOut) {
-      throw new Error('yt-dlp timed out while reading duration');
+      throw new Error(ytdlpTimeoutMessage());
     }
     return result;
   };
@@ -193,23 +268,22 @@ async function probeDuration({ url, ytdlpPath = 'yt-dlp', timeoutMs = 25000 }) {
   const first = await attempt();
   if (first.code === 0) {
     const seconds = parseDurationOutput(first.stdout);
-    if (seconds == null) throw new Error('Could not read video duration');
+    if (seconds == null) throw new Error("Couldn't read the video length from YouTube. Try again.");
     return seconds;
   }
 
-  const needsCookies = /sign in|age|cookies/i.test(first.stderr || '');
-  if (!needsCookies) {
-    throw new Error(`yt-dlp exited with code ${first.code}: ${(first.stderr || '').slice(-500)}`);
+  if (!shouldRetryWithCookies(first.stderr)) {
+    throwYtdlpFailure(first.stderr);
   }
 
   const retry = await attempt('chrome');
   if (retry.code === 0) {
     const seconds = parseDurationOutput(retry.stdout);
-    if (seconds == null) throw new Error('Could not read video duration');
+    if (seconds == null) throw new Error("Couldn't read the video length from YouTube. Try again.");
     return seconds;
   }
 
-  throw new Error(`yt-dlp exited with code ${retry.code}: ${(retry.stderr || '').slice(-500)}`);
+  throwYtdlpFailure(`${first.stderr || ''}\n${retry.stderr || ''}`);
 }
 
 module.exports = {
@@ -218,4 +292,8 @@ module.exports = {
   probeDuration,
   parseDurationOutput,
   isYoutubeUrl,
+  explainYtdlpFailure,
+  missingYtdlpMessage,
+  ytdlpTimeoutMessage,
+  shouldRetryWithCookies,
 };
