@@ -10,8 +10,17 @@ asarUnpack:
   - node_modules/@snazzah/davey-win32-x64-msvc/**
   - node_modules/node-global-key-listener/bin/**
 extraResources:
+  # Binaries live beside app.asar. Spawn cannot run a file packed inside the archive.
   - from: bin/win/ffmpeg.exe
     to: bin/ffmpeg.exe
+  - from: bin/win/yt-dlp.exe
+    to: bin/yt-dlp.exe
+  - from: third_party/yt-dlp/LICENSE
+    to: bin/yt-dlp-LICENSE.txt
+  - from: third_party/yt-dlp/THIRD_PARTY_LICENSES.txt
+    to: bin/yt-dlp-THIRD_PARTY_LICENSES.txt
+  - from: third_party/yt-dlp/NOTICE
+    to: bin/yt-dlp-NOTICE.txt
   - from: build/icon.png
     to: icon.png
 win:

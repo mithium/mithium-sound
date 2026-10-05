@@ -8,8 +8,10 @@
     "test:home-server": "node scripts/test-home-server-sync.js",
     "test:loaded-clip": "node scripts/test-loaded-clip.js",
     "test:studio": "node scripts/test-studio.js",
-    "postinstall": "node scripts/patch-voice.js && node scripts/extract-ffmpeg.js",
-    "build": "node scripts/patch-voice.js && node scripts/extract-ffmpeg.js && electron-builder --win nsis zip"
+    "test:youtube": "node scripts/test-youtube.js",
+    "postinstall": "node scripts/patch-voice.js && node scripts/extract-ffmpeg.js && node scripts/fetch-ytdlp.js",
+    "build": "node scripts/patch-voice.js && node scripts/extract-ffmpeg.js && node scripts/fetch-ytdlp.js && electron-builder --win nsis zip && node scripts/verify-ytdlp-packaging.js --require-zip",
+    "package:check": "node scripts/fetch-ytdlp.js && electron-builder --win dir --x64 && node scripts/verify-ytdlp-packaging.js"
   },
   "author": "Mithium",
   "license": "MIT",

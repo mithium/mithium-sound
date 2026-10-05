@@ -58,6 +58,7 @@ setupFFmpeg();
 const bot = require('./bot');
 const soundboard = require('./soundboard');
 const youtube = require('./youtube');
+const { resolveYtdlpPath: resolveConfiguredYtdlpPath } = require('./ytdlpBin');
 const settings = require('./settings');
 const remote = require('./remote');
 const homeserver = require('./homeserver');
@@ -116,15 +117,25 @@ autoUpdater.on('update-downloaded', (info) => {
   }
 });
 
-// Resolve a bundled binary to its full path (for yt-dlp, etc.)
-function resolveBin(name) {
-  // For yt-dlp, check if it's in PATH or settings
-  return name;
+// A Settings path wins. Otherwise use the extraResources copy outside app.asar.
+function resolveYtdlpPath() {
+  return resolveConfiguredYtdlpPath({
+    customPath: settings.get('ytdlpPath'),
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    devPath: path.join(__dirname, '..', '..', 'bin', 'win', 'yt-dlp.exe'),
+  });
 }
 
-function resolveYtdlpPath() {
-  return settings.get('ytdlpPath') || 'yt-dlp';
+function setupYtdlp() {
+  const ytdlpPath = resolveYtdlpPath();
+  if (fs.existsSync(ytdlpPath)) {
+    console.log('Using yt-dlp:', ytdlpPath);
+  } else {
+    console.error('yt-dlp not found at:', ytdlpPath);
+  }
 }
+setupYtdlp();
 
 function getIconPath() {
   const candidates = [
