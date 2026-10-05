@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#1e1e2e">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -13,22 +13,23 @@
   <link rel="apple-touch-icon" href="icon-192.png">
 </head>
 <body>
-  <!-- Header -->
-  <header id="header">
-    <h1>🎵 Mithium Sound</h1>
-    <div class="header-status">
-      <span id="connection-status" class="status-dot offline" title="Disconnected"></span>
-      <span id="connection-text">Connecting...</span>
-    </div>
-  </header>
+  <!-- Sticks as one bar so the stop control stays reachable without a hardcoded offset. -->
+  <div class="top-chrome">
+    <header id="header">
+      <h1>🎵 Mithium Sound</h1>
+      <div class="header-status">
+        <span id="connection-status" class="status-dot offline" title="Disconnected"></span>
+        <span id="connection-text">Connecting...</span>
+      </div>
+    </header>
 
-  <!-- Toolbar -->
-  <div class="toolbar">
-    <button id="stop-btn" class="stop-btn">⏹ Stop</button>
-    <div class="volume-control">
-      <label for="volume-slider">Vol</label>
-      <input type="range" id="volume-slider" min="0" max="150" value="100">
-      <span id="volume-value">100%</span>
+    <div class="toolbar">
+      <button id="stop-btn" class="stop-btn">⏹ Stop</button>
+      <div class="volume-control">
+        <label for="volume-slider">Vol</label>
+        <input type="range" id="volume-slider" min="0" max="150" value="100">
+        <span id="volume-value">100%</span>
+      </div>
     </div>
   </div>
   <div class="hear-bar">

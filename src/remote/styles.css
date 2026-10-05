@@ -25,6 +25,15 @@
   --radius: 8px;
   --radius-sm: 5px;
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  /* Clears the home indicator. While the mobile browser bars are showing,
+     100vh/100lvh is taller than the visible area, so add that difference too. */
+  --remote-end-gap: max(16px, env(safe-area-inset-bottom, 0px));
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --remote-end-gap: max(16px, calc(16px + env(safe-area-inset-bottom, 0px) + 100lvh - 100dvh));
+  }
 }
 
 body {
@@ -32,7 +41,9 @@ body {
   background: var(--bg-primary);
   color: var(--text);
   overflow-x: hidden;
+  overflow-x: clip;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   user-select: none;
@@ -40,7 +51,16 @@ body {
   touch-action: manipulation;
 }
 
-/* Header */
+/* Header + stop/volume stay on screen together while the list scrolls. */
+.top-chrome {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
 #header {
   display: flex;
   align-items: center;
@@ -49,9 +69,6 @@ body {
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  position: sticky;
-  top: 0;
-  z-index: 100;
 }
 
 #header h1 {
@@ -98,9 +115,6 @@ body {
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  position: sticky;
-  top: 61px;
-  z-index: 99;
 }
 
 .stop-btn {
@@ -192,6 +206,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .loaded-panel-top {
@@ -289,13 +304,15 @@ body {
   box-shadow: 0 0 10px rgba(166, 227, 161, 0.35);
 }
 
-/* Main Content */
+/* Main Content
+   The list is in normal document flow. A flex:1 overflow:auto pane sized
+   from 100vh ends under the mobile browser bars, so the last play control
+   cannot be scrolled into view. */
 #main {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
+  flex: 1 0 auto;
+  overflow: visible;
   padding: 16px;
-  -webkit-overflow-scrolling: touch;
+  padding-bottom: var(--remote-end-gap);
 }
 
 /* Sound Grid */
@@ -361,23 +378,29 @@ body {
 
 .sound-group-content {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 12px;
-  max-height: 2000px;
-  overflow: hidden;
-  transition: max-height 0.3s ease, opacity 0.3s ease;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.3s ease, opacity 0.3s ease;
   opacity: 1;
 }
 
-@media (max-width: 400px) {
-  .sound-group-content {
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  }
+.sound-group-content.collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
 }
 
-.sound-group-content.collapsed {
-  max-height: 0;
-  opacity: 0;
+.sound-group-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 400px) {
+  .sound-group-items {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  }
 }
 
 .sound-btn-wrapper {
@@ -485,6 +508,7 @@ body {
   gap: 8px;
   padding: 10px 16px 0;
   background: var(--bg-secondary);
+  flex-shrink: 0;
 }
 
 .remote-tab {
@@ -507,6 +531,7 @@ body {
   padding: 10px 16px 12px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .hear-bar .loaded-hint {
@@ -520,6 +545,8 @@ body {
 
 .remote-panel {
   padding: 16px;
+  padding-bottom: var(--remote-end-gap);
+  flex: 1 0 auto;
 }
 
 .remote-panel h2 {
@@ -726,21 +753,16 @@ body {
   display: none !important;
 }
 
-/* Safe area support for notched devices */
+/* Safe area support for notched devices and the gesture bar */
 @supports (padding: max(0px)) {
-  #header {
-    padding-left: max(16px, env(safe-area-inset-left));
-    padding-right: max(16px, env(safe-area-inset-right));
-  }
-  
-  .toolbar {
-    padding-left: max(16px, env(safe-area-inset-left));
-    padding-right: max(16px, env(safe-area-inset-right));
-  }
-  
-  #main {
-    padding-left: max(16px, env(safe-area-inset-left));
-    padding-right: max(16px, env(safe-area-inset-right));
-    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  #header,
+  .toolbar,
+  .hear-bar,
+  .loaded-panel,
+  #remote-tabs,
+  #main,
+  .remote-panel {
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
   }
 }

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mithium-sound-remote-v6';
+const CACHE_NAME = 'mithium-sound-remote-v7';
 const urlsToCache = [
   '/',
   '/index.html',

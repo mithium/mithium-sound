@@ -137,10 +137,15 @@ function renderSoundGrid() {
     const groupContent = document.createElement('div');
     groupContent.className = 'sound-group-content';
     if (group.collapsed) groupContent.classList.add('collapsed');
-    
+
+    // Inner grid can grow with every clip. The outer track only collapses;
+    // it must not cap the list with a fixed max-height.
+    const groupItems = document.createElement('div');
+    groupItems.className = 'sound-group-items';
     groupSounds.forEach(s => {
-      groupContent.appendChild(createSoundButton(s));
+      groupItems.appendChild(createSoundButton(s));
     });
+    groupContent.appendChild(groupItems);
     
     groupContainer.appendChild(groupHeader);
     groupContainer.appendChild(groupContent);
