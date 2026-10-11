@@ -145,28 +145,96 @@ function startDesktopStudio() {
     $('#edit-render').disabled = inserts.length === 0;
   }
 
+  let savedMic = { deviceId: '', label: '' };
+  let savedMicLoaded = false;
+  let micListReady = false;
+  let micPreserveSaved = false;
+  let applyingMic = false;
+  let micEpoch = 0;
+
+  function setMicNote(message) {
+    const note = $('#rec-device-note');
+    if (!note) return;
+    note.textContent = message || '';
+    note.classList.toggle('hidden', !message);
+  }
+
+  function selectedMicConstraint() {
+    const deviceId = deviceSelect.value;
+    if (!deviceId || deviceId === 'default') return true;
+    return { deviceId: { exact: deviceId } };
+  }
+
   async function enumerateInputs() {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const inputs = devices.filter((device) => device.kind === 'audioinput');
-    const settings = await window.api.settingsGet();
-    const saved = settings.recordDeviceId || '';
+    const epoch = micEpoch;
+    if (!savedMicLoaded) {
+      const settings = await window.api.settingsGet();
+      if (epoch !== micEpoch) return;
+      if (!savedMicLoaded) {
+        savedMic = {
+          deviceId: settings.recordDeviceId || '',
+          label: settings.recordDeviceLabel || '',
+        };
+        savedMicLoaded = true;
+      }
+    }
+    if (epoch !== micEpoch) return;
+    const devices = await window.MithiumAudioDevices.listDevices(navigator.mediaDevices);
+    if (epoch !== micEpoch) return;
+    const inputs = devices.filter((device) => device.kind === 'audioinput' && device.deviceId && device.deviceId !== 'default');
+    const resolved = window.MithiumAudioDevices.resolveSavedDevice(inputs, savedMic, 'input');
+
+    applyingMic = true;
     deviceSelect.innerHTML = '';
     if (!inputs.length) {
       const option = document.createElement('option');
       option.value = '';
       option.textContent = 'No microphone found';
       deviceSelect.appendChild(option);
+    } else {
+      inputs.forEach((device, index) => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        const label = window.MithiumAudioDevices.usableLabel(device.label);
+        if (label) option.dataset.label = label;
+        option.textContent = device.label || `Microphone ${index + 1}`;
+        deviceSelect.appendChild(option);
+      });
+      const fallback = document.createElement('option');
+      fallback.value = 'default';
+      fallback.textContent = 'Default microphone';
+      deviceSelect.appendChild(fallback);
+    }
+    if (resolved.status === 'matched' && Array.from(deviceSelect.options).some((opt) => opt.value === resolved.activeDeviceId)) {
+      deviceSelect.value = resolved.activeDeviceId;
+    } else if (!inputs.length) {
+      deviceSelect.value = '';
+    } else if (resolved.status === 'missing' || savedMic.deviceId === 'default') {
+      deviceSelect.value = 'default';
+    } else if (inputs[0]) {
+      deviceSelect.value = inputs[0].deviceId;
+    }
+    applyingMic = false;
+
+    micListReady = true;
+    micPreserveSaved = resolved.status === 'missing';
+    setMicNote(resolved.note);
+    if (resolved.status === 'missing') {
+      savedMic = {
+        deviceId: resolved.saved.deviceId || '',
+        label: resolved.saved.label || '',
+      };
       return;
     }
-    inputs.forEach((device, index) => {
-      const option = document.createElement('option');
-      option.value = device.deviceId;
-      option.textContent = device.label || `Microphone ${index + 1}`;
-      deviceSelect.appendChild(option);
+    if (!resolved.persist || epoch !== micEpoch) return;
+    savedMic = {
+      deviceId: resolved.saved.deviceId || '',
+      label: resolved.saved.label || '',
+    };
+    await window.api.settingsSave({
+      recordDeviceId: savedMic.deviceId,
+      recordDeviceLabel: savedMic.label,
     });
-    if (saved && Array.from(deviceSelect.options).some((opt) => opt.value === saved)) {
-      deviceSelect.value = saved;
-    }
   }
 
   async function listInputs() {
@@ -182,9 +250,19 @@ function startDesktopStudio() {
   }
 
   async function rememberDevice() {
-    const id = deviceSelect.value || '';
-    if (!id) return;
-    await window.api.settingsSave({ recordDeviceId: id });
+    if (micPreserveSaved || !micListReady) return;
+    const option = deviceSelect.options[deviceSelect.selectedIndex];
+    const label = option && option.dataset.label ? option.dataset.label : '';
+    const choice = window.MithiumAudioDevices.choiceFromOption(deviceSelect.value, label);
+    savedMic = {
+      deviceId: choice.deviceId,
+      label: choice.label,
+    };
+    savedMicLoaded = true;
+    await window.api.settingsSave({
+      recordDeviceId: savedMic.deviceId,
+      recordDeviceLabel: savedMic.label,
+    });
   }
 
   function stopMeter() {
@@ -202,11 +280,11 @@ function startDesktopStudio() {
     showError(errorEl, '');
     await rememberDevice();
     const deviceId = deviceSelect.value;
-    const audio = deviceId ? { deviceId: { exact: deviceId } } : true;
+    const audio = selectedMicConstraint();
     try {
       recordStream = await navigator.mediaDevices.getUserMedia({ audio });
     } catch (err) {
-      if (!deviceId || (err.name !== 'OverconstrainedError' && err.name !== 'NotFoundError')) throw err;
+      if (!deviceId || deviceId === 'default' || (err.name !== 'OverconstrainedError' && err.name !== 'NotFoundError')) throw err;
       recordStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     }
     await enumerateInputs();
@@ -384,6 +462,11 @@ function startDesktopStudio() {
     listInputs().catch((err) => showError(errorEl, err.message));
   });
   deviceSelect.addEventListener('change', () => {
+    if (applyingMic || !micListReady) return;
+    micEpoch += 1;
+    micPreserveSaved = false;
+    savedMicLoaded = true;
+    setMicNote('');
     rememberDevice().catch((err) => console.error(err));
   });
   if (window.MithiumMixEditor) {
@@ -394,13 +477,13 @@ function startDesktopStudio() {
       openMic: async () => {
         await rememberDevice();
         const deviceId = deviceSelect.value;
-        const audio = deviceId ? { deviceId: { exact: deviceId } } : true;
+        const audio = selectedMicConstraint();
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ audio });
           await enumerateInputs();
           return stream;
         } catch (err) {
-          if (!deviceId || (err.name !== 'OverconstrainedError' && err.name !== 'NotFoundError')) throw err;
+          if (!deviceId || deviceId === 'default' || (err.name !== 'OverconstrainedError' && err.name !== 'NotFoundError')) throw err;
           return navigator.mediaDevices.getUserMedia({ audio: true });
         }
       },
@@ -412,9 +495,13 @@ function startDesktopStudio() {
       groupId: () => ($('#edit-group').value ? Number($('#edit-group').value) : null),
       preferLocalPreview: () => true,
       prepareContext: async (ctx) => {
-        const settings = await window.api.settingsGet();
-        if (settings.selectedDeviceId && settings.selectedDeviceId !== 'default' && ctx.setSinkId) {
-          try { await ctx.setSinkId(settings.selectedDeviceId); } catch (err) { console.error(err); }
+        if (!ctx.setSinkId || !window.MithiumAudioDevices) return;
+        const id = window.mithiumOutputDeviceId ? window.mithiumOutputDeviceId() : 'default';
+        try {
+          await ctx.setSinkId(window.MithiumAudioDevices.sinkIdFor(id));
+        } catch (err) {
+          console.error(err);
+          try { await ctx.setSinkId(''); } catch (fallbackErr) { console.error(fallbackErr); }
         }
       },
       saveMix: async (payload) => (await window.api.clipMix(payload)).sound,
@@ -641,5 +728,10 @@ function startDesktopStudio() {
 
   if (!window.MithiumMixEditor) redraw();
   enumerateInputs().catch((err) => showError(errorEl, err.message));
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', () => {
+      enumerateInputs().catch((err) => showError(errorEl, err.message));
+    });
+  }
   window.mithiumStudioRefresh();
 }

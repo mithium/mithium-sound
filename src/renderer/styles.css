@@ -1132,5 +1132,6 @@ button:disabled {
 
 /* ===== Utilities ===== */
 .hidden { display: none !important; }
+.device-note { color: var(--warning); font-size: 12px; line-height: 1.5; margin: 6px 0 0; }
 .error-text { color: var(--danger); font-size: 13px; margin-top: 10px; }
 .success-text { color: var(--success); font-size: 13px; }

@@ -5,6 +5,10 @@ let contextTarget = null;
 let playingId = null;
 let audioElement = null;
 let availableDevices = [];
+let savedOutputPref = { deviceId: 'default', label: '' };
+let activeOutputDeviceId = 'default';
+let outputEpoch = 0;
+let applyingOutput = false;
 let armedClipId = null;
 let holdToPlayActive = false;
 let isKeyHeld = false;
@@ -121,37 +125,84 @@ $$('.tab').forEach((tab) => {
 });
 
 // --- Audio Device Management ---
-async function enumerateDevices() {
+function currentOutputDeviceId() {
+  return activeOutputDeviceId || 'default';
+}
+window.mithiumOutputDeviceId = currentOutputDeviceId;
+
+function setOutputNote(message) {
+  const note = $('#setting-device-note');
+  if (!note) return;
+  note.textContent = message || '';
+  note.classList.toggle('hidden', !message);
+}
+
+function applyOutputChoice(devices) {
+  const select = $('#setting-device');
+  const resolved = window.MithiumAudioDevices.resolveSavedDevice(devices, savedOutputPref, 'output');
+  applyingOutput = true;
+  select.innerHTML = '<option value="default">System Default</option>';
+  devices.forEach((device) => {
+    if (!device.deviceId || device.deviceId === 'default') return;
+    const option = document.createElement('option');
+    option.value = device.deviceId;
+    const label = window.MithiumAudioDevices.usableLabel(device.label);
+    if (label) option.dataset.label = label;
+    option.textContent = device.label || `Device ${device.deviceId.slice(0, 8)}…`;
+    select.appendChild(option);
+  });
+  const selected = resolved.status === 'matched' ? resolved.activeDeviceId : 'default';
+  if (Array.from(select.options).some((opt) => opt.value === selected)) {
+    select.value = selected;
+  }
+  applyingOutput = false;
+
+  activeOutputDeviceId = resolved.activeDeviceId || 'default';
+  savedOutputPref = {
+    deviceId: resolved.saved.deviceId || 'default',
+    label: resolved.saved.label || '',
+  };
+  setOutputNote(resolved.note);
+  if (!resolved.persist) return null;
+  return window.api.settingsSave({
+    selectedDeviceId: savedOutputPref.deviceId,
+    selectedDeviceLabel: savedOutputPref.label,
+  });
+}
+
+async function enumerateDevices(opts) {
+  const epoch = outputEpoch;
   try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    availableDevices = devices.filter(d => d.kind === 'audiooutput');
-    updateDeviceList();
+    let devices = await window.MithiumAudioDevices.listDevices(navigator.mediaDevices, opts);
+    if (epoch !== outputEpoch) return;
+    if (window.MithiumAudioDevices.outputsNeedLabel(devices)) {
+      try {
+        const probe = new Audio();
+        if (typeof probe.setSinkId === 'function') await probe.setSinkId('');
+        devices = await navigator.mediaDevices.enumerateDevices();
+      } catch (err) {
+        console.warn('Output device names are unavailable:', err);
+      }
+    }
+    if (epoch !== outputEpoch) return;
+    availableDevices = devices.filter((d) => d.kind === 'audiooutput');
+    const pendingSave = applyOutputChoice(availableDevices);
     checkVoiceMeeterStatus();
+    if (pendingSave) await pendingSave;
   } catch (err) {
     console.error('Failed to enumerate devices:', err);
   }
 }
 
-function updateDeviceList() {
-  const select = $('#setting-device');
-  const currentValue = select.value;
-  select.innerHTML = '<option value="default">System Default</option>';
-  
-  availableDevices.forEach(device => {
-    const option = document.createElement('option');
-    option.value = device.deviceId;
-    option.textContent = device.label || `Device ${device.deviceId.substring(0, 8)}...`;
-    select.appendChild(option);
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    enumerateDevices().catch((err) => console.error('Failed to refresh output devices:', err));
   });
-  
-  if (currentValue && Array.from(select.options).some(opt => opt.value === currentValue)) {
-    select.value = currentValue;
-  }
 }
 
 function checkVoiceMeeterStatus() {
-  const hasVoiceMeeter = availableDevices.some(device => 
-    device.label.toLowerCase().includes('voicemeeter')
+  const hasVoiceMeeter = availableDevices.some((device) =>
+    (device.label || '').toLowerCase().includes('voicemeeter')
   );
   
   const statusText = $('#voicemeeter-status-text');
@@ -173,7 +224,7 @@ $('#voicemeeter-download-btn').addEventListener('click', () => {
 });
 
 $('#refresh-devices-btn').addEventListener('click', async () => {
-  await enumerateDevices();
+  await enumerateDevices({ force: true });
 });
 
 // --- Settings ---
@@ -193,8 +244,12 @@ async function loadSettings() {
   // Update UI state based on output mode
   updateOutputModeUI(s.outputMode || 'discord');
   
+  savedOutputPref = {
+    deviceId: s.selectedDeviceId || 'default',
+    label: s.selectedDeviceLabel || '',
+  };
+  activeOutputDeviceId = savedOutputPref.deviceId;
   await enumerateDevices();
-  $('#setting-device').value = s.selectedDeviceId || 'default';
   
   // Load remote settings
   await loadRemoteSettings(s);
@@ -213,7 +268,8 @@ async function autoSaveSettings() {
     holdToPlayMode: $('#setting-hold-to-play').checked,
     volume: parseInt(volumeSlider.value, 10),
     outputMode: $('#setting-output-mode').value,
-    selectedDeviceId: $('#setting-device').value,
+    // The device dropdown shows System Default while a saved device is
+    // unplugged. Writing that fallback here would forget the device.
     remoteEnabled: $('#setting-remote-enabled').checked,
     remotePort: parseInt($('#setting-remote-port').value, 10),
     remoteAuthToken: $('#setting-remote-auth').value.trim(),
@@ -295,7 +351,25 @@ async function handleHoldToPlayChange() {
 // Auto-save on all setting changes
 $('#setting-autoconnect').addEventListener('change', autoSaveSettings);
 $('#setting-output-mode').addEventListener('change', handleOutputModeChange);
-$('#setting-device').addEventListener('change', autoSaveSettings);
+$('#setting-device').addEventListener('change', async () => {
+  if (applyingOutput) return;
+  outputEpoch += 1;
+  const select = $('#setting-device');
+  const option = select.options[select.selectedIndex];
+  const label = option && option.dataset.label ? option.dataset.label : '';
+  savedOutputPref = window.MithiumAudioDevices.choiceFromOption(select.value, label);
+  activeOutputDeviceId = savedOutputPref.deviceId;
+  setOutputNote('');
+  try {
+    await window.api.settingsSave({
+      selectedDeviceId: savedOutputPref.deviceId,
+      selectedDeviceLabel: savedOutputPref.label,
+    });
+    await autoSaveSettings();
+  } catch (err) {
+    console.error('Failed to save output device:', err);
+  }
+});
 $('#setting-hold-to-play').addEventListener('change', handleHoldToPlayChange);
 
 // Token, ytdlp, and ffmpeg save on blur (after typing)
@@ -966,7 +1040,7 @@ async function stopAllPlayback() {
   updateLoadedClipBanner();
 }
 
-async function playLocalAudio(filePath, volume, deviceId) {
+async function playLocalAudio(filePath, volume) {
   try {
     if (!audioElement) {
       audioElement = new Audio();
@@ -985,12 +1059,21 @@ async function playLocalAudio(filePath, volume, deviceId) {
     
     audioElement.src = filePath;
     audioElement.volume = Math.max(0, Math.min(1, volume));
-    
-    if (deviceId && deviceId !== 'default' && typeof audioElement.setSinkId === 'function') {
+
+    const sinkId = window.MithiumAudioDevices.sinkIdFor(currentOutputDeviceId());
+    const holdingMissingDevice = !sinkId && savedOutputPref.deviceId && savedOutputPref.deviceId !== 'default';
+    if (typeof audioElement.setSinkId === 'function') {
       try {
-        await audioElement.setSinkId(deviceId);
+        await audioElement.setSinkId(sinkId);
+        if (!holdingMissingDevice) setOutputNote('');
       } catch (err) {
         console.error('Failed to set output device:', err);
+        if (sinkId) {
+          try { await audioElement.setSinkId(''); } catch (fallbackErr) {
+            console.error('Failed to fall back to the default output device:', fallbackErr);
+          }
+          setOutputNote(window.MithiumAudioDevices.missingNote(savedOutputPref.label, 'output'));
+        }
       }
     }
     
@@ -1031,7 +1114,7 @@ async function playSound(id, opts = {}) {
     const result = await window.api.soundPlay(id);
     
     if ((outputMode === 'local' || outputMode === 'both') && result.filePath) {
-      await playLocalAudio(result.filePath, result.volume, settings.selectedDeviceId);
+      await playLocalAudio(result.filePath, result.volume);
     }
     
     playingId = id;
@@ -1856,8 +1939,7 @@ window.api.onLoadedClipForceStop(() => {
 window.api.onRemotePlayLocal(async (data) => {
   if (!data || !data.filePath) return;
   try {
-    const settings = await window.api.settingsGet();
-    await playLocalAudio(data.filePath, data.volume == null ? 1 : data.volume, settings.selectedDeviceId);
+    await playLocalAudio(data.filePath, data.volume == null ? 1 : data.volume);
     if (data.id != null) {
       playingId = data.id;
       renderSoundGrid();

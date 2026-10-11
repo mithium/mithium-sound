@@ -14,6 +14,8 @@ const DEFAULTS = {
   volume: 100,
   outputMode: 'discord',
   selectedDeviceId: 'default',
+  // Device ids from Chromium change between sessions. The label restores the same device.
+  selectedDeviceLabel: '',
   holdToPlayMode: false,
   remoteEnabled: false,
   remotePort: 3000,
@@ -24,6 +26,7 @@ const DEFAULTS = {
   loadedClipId: null,
   loadedClipAutoHold: true,
   recordDeviceId: '',
+  recordDeviceLabel: '',
   remoteHearOnPhone: false,
 };
 
