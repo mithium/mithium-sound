@@ -12,6 +12,13 @@ const loadedClip = require('./loadedClip');
 const studio = require('./studioRoutes');
 const remoteCert = require('./remoteCert');
 const openverse = require('./openverse');
+const {
+  listenWithFallback,
+  normalizePort,
+  swallowErrors,
+  fallbackNotice,
+  unavailableBecauseBusy,
+} = require('./listenPort');
 
 let httpServer = null;
 let httpsServer = null;
@@ -20,10 +27,15 @@ const socketServers = [];
 const sockets = new Set();
 let isRunning = false;
 let port = 3000;
+let requestedPort = 3000;
 let securePort = null;
 let authToken = null;
 let onLibraryChange = null;
 let onPlayLocal = null;
+let unavailableReason = null;
+let portNotice = '';
+let secureNotice = '';
+let secureUnavailableReason = null;
 
 // Get all LAN IP addresses
 function getLanIPs() {
@@ -77,15 +89,28 @@ function sendApiError(res, err) {
 }
 
 async function startServer(opts = {}) {
-  if (isRunning) {
-    throw new Error('Remote server is already running');
+  if (isRunning || httpServer || httpsServer) {
+    await stopServer();
   }
-  
-  port = opts.port || 3000;
+
+  const rawPort = opts.port == null || opts.port === '' ? 3000 : opts.port;
+  const normalized = normalizePort(rawPort);
+  requestedPort = normalized == null ? 3000 : normalized;
+  port = requestedPort;
   authToken = opts.authToken || null;
   onLibraryChange = opts.onLibraryChange || null;
   onPlayLocal = opts.onPlayLocal || null;
   securePort = null;
+  unavailableReason = null;
+  portNotice = '';
+  secureNotice = '';
+  secureUnavailableReason = null;
+
+  if (normalized == null) {
+    unavailableReason = 'Enter a port from 1 to 65535.';
+    isRunning = false;
+    return;
+  }
   
   expressApp = express();
   expressApp.use(express.json({ limit: '1mb' }));
@@ -397,30 +422,31 @@ async function startServer(opts = {}) {
   
   // Create HTTP server
   httpServer = http.createServer(expressApp);
+  swallowErrors(httpServer);
   attachSockets(httpServer);
-  await listenOn(httpServer, port);
+  try {
+    const bound = await listenWithFallback(httpServer, requestedPort);
+    port = bound.port;
+    portNotice = fallbackNotice(requestedPort, port, 'The remote');
+  } catch (err) {
+    console.error('Remote HTTP server failed:', err.message);
+    unavailableReason = err && err.code === 'EINVAL'
+      ? err.message
+      : unavailableBecauseBusy(requestedPort, 'the remote');
+    await closeServers();
+    return;
+  }
   isRunning = true;
   console.log(`Remote server started on port ${port}`);
   console.log('Access URLs:', getAccessURLs());
   await startSecureServer();
 }
 
-function listenOn(server, listenPort) {
-  return new Promise((resolve, reject) => {
-    const onError = (err) => {
-      server.off('error', onError);
-      reject(err);
-    };
-    server.once('error', onError);
-    server.listen(listenPort, '0.0.0.0', () => {
-      server.off('error', onError);
-      resolve();
-    });
-  });
-}
-
 function attachSockets(server) {
   const wss = new WebSocketServer({ server, path: '/ws' });
+  // ws re-emits the HTTP server's listen error. Without a listener that
+  // re-emit is an uncaught exception in the main process.
+  swallowErrors(wss);
   socketServers.push(wss);
   wss.on('connection', (ws, req) => {
     sockets.add(ws);
@@ -455,8 +481,11 @@ function attachSockets(server) {
 }
 
 async function startSecureServer() {
-  const nextPort = Number(port) + 1;
-  if (!Number.isInteger(nextPort) || nextPort > 65535) return;
+  const preferred = Number(port) + 1;
+  if (!Number.isInteger(preferred) || preferred > 65535) {
+    secureUnavailableReason = 'The secure remote is unavailable because there is no free port after the remote.';
+    return;
+  }
   let credentials;
   try {
     const { app } = require('electron');
@@ -464,27 +493,56 @@ async function startSecureServer() {
     credentials = remoteCert.loadOrCreate(dir, getLanIPs());
   } catch (err) {
     console.error('Remote HTTPS certificate failed:', err.message);
+    secureUnavailableReason = 'The secure remote is unavailable because its certificate could not be created.';
     return;
   }
   const server = https.createServer(credentials, expressApp);
+  swallowErrors(server);
   attachSockets(server);
   try {
-    await listenOn(server, nextPort);
+    const bound = await listenWithFallback(server, preferred, { skip: new Set([port]) });
+    httpsServer = server;
+    securePort = bound.port;
+    secureNotice = fallbackNotice(preferred, bound.port, 'The secure remote');
+    console.log('Remote HTTPS (phone microphone) on port', bound.port);
   } catch (err) {
     console.error('Remote HTTPS server failed:', err.message);
+    secureUnavailableReason = unavailableBecauseBusy(preferred, 'the secure remote');
+    const wss = socketServers.pop();
+    try { if (wss) wss.close(); } catch { /* already closed */ }
     try { server.close(); } catch { /* not listening */ }
-    return;
   }
-  httpsServer = server;
-  securePort = nextPort;
-  console.log('Remote HTTPS (phone microphone) on port', nextPort);
 }
 
-function stopServer() {
-  if (!isRunning && !httpServer) {
-    return;
-  }
-  
+function closeOne(server) {
+  return new Promise((resolve) => {
+    if (!server) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, 1500);
+    try {
+      if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+    } catch {
+      // Already closed.
+    }
+    try {
+      server.close(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    } catch {
+      clearTimeout(timer);
+      resolve();
+    }
+  });
+}
+
+async function closeServers() {
+  const http = httpServer;
+  const secure = httpsServer;
+  httpServer = null;
+  httpsServer = null;
   sockets.forEach((client) => {
     try { client.close(); } catch { /* already closed */ }
   });
@@ -493,30 +551,35 @@ function stopServer() {
     try { wss.close(); } catch { /* already closed */ }
   });
   socketServers.length = 0;
-  
-  if (httpServer) {
-    httpServer.close();
-    httpServer = null;
-  }
-  if (httpsServer) {
-    httpsServer.close();
-    httpsServer = null;
-  }
-  
+  await Promise.all([closeOne(http), closeOne(secure)]);
   expressApp = null;
   isRunning = false;
   securePort = null;
-  console.log('Remote server stopped');
+}
+
+async function stopServer() {
+  unavailableReason = null;
+  portNotice = '';
+  secureNotice = '';
+  secureUnavailableReason = null;
+  const wasRunning = isRunning || httpServer || httpsServer;
+  await closeServers();
+  if (wasRunning) console.log('Remote server stopped');
 }
 
 function getStatus() {
+  const notice = [portNotice, secureNotice].filter(Boolean).join(' ');
   return {
     running: isRunning,
-    port,
+    port: isRunning ? port : requestedPort,
+    requestedPort,
     securePort,
     urls: isRunning ? getAccessURLs() : [],
     secureUrls: isRunning && securePort ? getSecureURLs() : [],
     hasAuth: !!authToken,
+    unavailableReason: isRunning ? null : unavailableReason,
+    notice: isRunning ? notice : '',
+    secureUnavailableReason: isRunning ? secureUnavailableReason : null,
   };
 }
 

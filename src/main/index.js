@@ -66,8 +66,11 @@ const loadedClip = require('./loadedClip');
 const studio = require('./studioRoutes');
 const { createWinKeyHold } = require('./winKeyHold');
 const { classifyGlobalEvent, hookSwallowResult } = require('./loadedClipControl');
+const { claimElectronInstance, releaseInstanceLock, ALREADY_RUNNING_MESSAGE } = require('./singleInstance');
+const { watchQuitFlag } = require('./installQuit');
 
 let mainWindow = null;
+let showWhenReady = false;
 let tray = null;
 let keyHold = null;
 app.isQuitting = false;
@@ -327,6 +330,14 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
+function focusExistingWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    showWhenReady = true;
+    return;
+  }
+  showMainWindow();
+}
+
 function createTray() {
   if (tray) return;
   tray = new Tray(trayImage());
@@ -416,41 +427,76 @@ function libraryMutated() {
   if (service) service.onLibraryChanged();
 }
 
-app.whenReady().then(async () => {
-  const allowPermission = (permission) => permission === 'media'
-    || permission === 'audioCapture'
-    || permission === 'mediaKeySystem'
-    || permission === 'speaker-selection'
-    || permission === 'clipboard-read'
-    || permission === 'clipboard-sanitized-write';
-  session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowPermission(permission));
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(allowPermission(permission));
+const instanceLaunch = claimElectronInstance({
+  requestLock: () => app.requestSingleInstanceLock(),
+  onSecondInstance: (handler) => app.on('second-instance', handler),
+  focus: () => focusExistingWindow(),
+  userDataDir: app.getPath('userData'),
+  pid: process.pid,
+  imageName: path.basename(process.execPath),
+});
+
+if (instanceLaunch.action === 'exit-silent') {
+  // Same integrity level: the first process gets second-instance and shows its window.
+  app.exit(0);
+  process.exit(0);
+} else if (instanceLaunch.action === 'message-exit') {
+  // Elevated and normal copies cannot see each other's Electron lock.
+  app.whenReady().then(() => {
+    dialog.showMessageBoxSync({
+      type: 'info',
+      title: 'Mithium Sound',
+      message: instanceLaunch.message || ALREADY_RUNNING_MESSAGE,
+      buttons: ['OK'],
+    });
+    app.exit(0);
   });
-  await soundboard.init();
-  initLoadedClip();
-  homeserver.onStatus((state) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('homeserver:status', state);
+} else {
+  watchQuitFlag(app.getPath('userData'), () => {
+    app.isQuitting = true;
+    app.quit();
+  });
+  app.on('will-quit', () => {
+    releaseInstanceLock(app.getPath('userData'), process.pid);
+  });
+
+  app.whenReady().then(async () => {
+    const allowPermission = (permission) => permission === 'media'
+      || permission === 'audioCapture'
+      || permission === 'mediaKeySystem'
+      || permission === 'speaker-selection'
+      || permission === 'clipboard-read'
+      || permission === 'clipboard-sanitized-write';
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowPermission(permission));
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+      callback(allowPermission(permission));
+    });
+    await soundboard.init();
+    initLoadedClip();
+    homeserver.onStatus((state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('homeserver:status', state);
+      }
+    });
+    createWindow();
+    if (showWhenReady) showMainWindow();
+    createTray();
+
+    // Register global shortcuts after window is created
+    registerGlobalShortcuts();
+
+    // Check for updates 5 seconds after launch (gives window time to open)
+    if (!app.isPackaged) {
+      console.log('Dev mode: skipping auto-update check');
+    } else {
+      setTimeout(() => {
+        autoUpdater.checkForUpdates().catch(err => {
+          console.error('Auto-update check failed:', err);
+        });
+      }, 5000);
     }
   });
-  createWindow();
-  createTray();
-  
-  // Register global shortcuts after window is created
-  registerGlobalShortcuts();
-  
-  // Check for updates 5 seconds after launch (gives window time to open)
-  if (!app.isPackaged) {
-    console.log('Dev mode: skipping auto-update check');
-  } else {
-    setTimeout(() => {
-      autoUpdater.checkForUpdates().catch(err => {
-        console.error('Auto-update check failed:', err);
-      });
-    }, 5000);
-  }
-});
+}
 
 let quitReleaseStarted = false;
 app.on('before-quit', (event) => {
@@ -793,20 +839,27 @@ ipcMain.handle('remote:start', async (_e, opts) => {
         }
       },
     });
-    return { success: true, ...remote.getStatus() };
   } catch (err) {
     console.error('Failed to start remote server:', err);
-    throw err;
+    const status = remote.getStatus();
+    return {
+      success: false,
+      ...status,
+      running: false,
+      unavailableReason: status.unavailableReason || err.message || 'The remote is unavailable.',
+    };
   }
+  const status = remote.getStatus();
+  return { success: !!status.running, ...status };
 });
 
-ipcMain.handle('remote:stop', () => {
+ipcMain.handle('remote:stop', async () => {
   try {
-    remote.stopServer();
-    return { success: true };
+    await remote.stopServer();
+    return { success: true, ...remote.getStatus() };
   } catch (err) {
     console.error('Failed to stop remote server:', err);
-    throw err;
+    return { success: false, unavailableReason: err.message || 'The remote could not be stopped.' };
   }
 });
 

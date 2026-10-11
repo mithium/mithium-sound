@@ -383,21 +383,41 @@ let remoteServerRunning = false;
 async function updateRemoteStatus() {
   try {
     const status = await window.api.remoteStatus();
-    remoteServerRunning = status.running;
-    
+    const view = window.MithiumRemoteStatus.remoteStatusView(status);
+    remoteServerRunning = view.state === 'running';
+
     const statusText = $('#remote-status-text');
+    const detail = $('#remote-status-detail');
     const urlsContainer = $('#remote-urls');
     const urlList = $('#remote-url-list');
     const qrContainer = $('#remote-qr');
-    
-    if (status.running) {
-      statusText.textContent = 'Running';
-      statusText.style.color = 'var(--success)';
-      
-      // Show URLs
-      urlList.innerHTML = '';
-      const labeled = status.urls.map((url) => ({ url, label: '' }));
-      (status.secureUrls || []).forEach((url) => labeled.push({ url, label: 'HTTPS mic · ' }));
+    const tones = {
+      danger: 'var(--danger)',
+      warning: 'var(--warning)',
+      muted: 'var(--text-muted)',
+    };
+
+    statusText.textContent = view.label;
+    if (view.state === 'running') statusText.style.color = 'var(--success)';
+    else if (view.state === 'unavailable') statusText.style.color = 'var(--danger)';
+    else statusText.style.color = 'var(--text-muted)';
+
+    if (detail) {
+      detail.textContent = view.detail || '';
+      detail.style.color = tones[view.detailTone] || 'var(--text-muted)';
+      detail.classList.toggle('hidden', !view.detail);
+    }
+
+    if (view.state !== 'running') {
+      urlsContainer.classList.add('hidden');
+      qrContainer.classList.add('hidden');
+      return;
+    }
+
+    // Show the address that is actually listening. The port field stays on the saved setting.
+    urlList.innerHTML = '';
+    const labeled = view.urls.map((url) => ({ url, label: '' }));
+    (view.secureUrls || []).forEach((url) => labeled.push({ url, label: 'HTTPS mic · ' }));
       labeled.forEach(({ url, label }) => {
         const authToken = $('#setting-remote-auth').value.trim();
         const fullUrl = authToken ? `${url}?token=${encodeURIComponent(authToken)}` : url;
@@ -427,22 +447,18 @@ async function updateRemoteStatus() {
       urlsContainer.classList.remove('hidden');
       
       // Generate and show QR code for first URL
-      if (status.urls.length > 0) {
+      if (view.urls.length > 0) {
         const authToken = $('#setting-remote-auth').value.trim();
-        const fullUrl = authToken ? `${status.urls[0]}?token=${encodeURIComponent(authToken)}` : status.urls[0];
-        
+        const fullUrl = authToken ? `${view.urls[0]}?token=${encodeURIComponent(authToken)}` : view.urls[0];
+
         const qrResult = await window.api.remoteGenerateQR(fullUrl);
         if (qrResult.qrCode) {
           $('#remote-qr-img').src = qrResult.qrCode;
           qrContainer.classList.remove('hidden');
         }
+      } else {
+        qrContainer.classList.add('hidden');
       }
-    } else {
-      statusText.textContent = 'Stopped';
-      statusText.style.color = 'var(--text-muted)';
-      urlsContainer.classList.add('hidden');
-      qrContainer.classList.add('hidden');
-    }
   } catch (err) {
     console.error('Failed to update remote status:', err);
   }
@@ -464,39 +480,30 @@ async function handleRemoteEnabledChange() {
         port,
         authToken: authToken || null,
       });
-      await updateRemoteStatus();
     } catch (err) {
       console.error('Failed to start remote server:', err);
-      await showModal({
-        title: 'Remote Server Error',
-        message: `Failed to start remote server: ${err.message}`,
-        confirmText: 'OK'
-      });
-      $('#setting-remote-enabled').checked = false;
-      configDiv.classList.add('hidden');
     }
+    await updateRemoteStatus();
   } else {
     configDiv.classList.add('hidden');
     
     // Stop the server
     try {
       await window.api.remoteStop();
-      await updateRemoteStatus();
     } catch (err) {
       console.error('Failed to stop remote server:', err);
     }
+    await updateRemoteStatus();
   }
   
   await autoSaveSettings();
 }
 
 async function handleRemotePortChange() {
-  if (!remoteServerRunning) {
-    await autoSaveSettings();
-    return;
-  }
-  
-  // Restart server with new port
+  await autoSaveSettings();
+  if (!$('#setting-remote-enabled').checked) return;
+
+  // The saved port is the one in the field, including when the previous bind failed.
   try {
     await window.api.remoteStop();
     const port = parseInt($('#setting-remote-port').value, 10);
@@ -505,16 +512,10 @@ async function handleRemotePortChange() {
       port,
       authToken: authToken || null,
     });
-    await updateRemoteStatus();
-    await autoSaveSettings();
   } catch (err) {
     console.error('Failed to restart remote server:', err);
-    await showModal({
-      title: 'Remote Server Error',
-      message: `Failed to restart remote server: ${err.message}`,
-      confirmText: 'OK'
-    });
   }
+  await updateRemoteStatus();
 }
 
 async function handleRemoteAuthChange() {
@@ -654,12 +655,10 @@ async function loadRemoteSettings(s) {
         port: s.remotePort || 3000,
         authToken: s.remoteAuthToken || null,
       });
-      await updateRemoteStatus();
     } catch (err) {
       console.error('Failed to auto-start remote server:', err);
-      $('#setting-remote-enabled').checked = false;
-      $('#remote-config').classList.add('hidden');
     }
+    await updateRemoteStatus();
   }
 }
 
