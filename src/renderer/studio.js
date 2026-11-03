@@ -719,11 +719,32 @@ function startDesktopStudio() {
   let grabRequest = '';
   let grabId = '';
   let grabAudioUrl = null;
+  let grabMode = 'quick';
 
   function setGrabBusy(busy) {
     $('#grab-go').disabled = busy;
+    const smart = $('#grab-smart');
+    if (smart) smart.disabled = busy;
     $('#grab-save').disabled = busy;
     $('#grab-another').disabled = busy;
+    ['#grab-earlier', '#grab-later', '#grab-shorter', '#grab-longer'].forEach((id) => {
+      const button = $(id);
+      if (button) button.disabled = busy;
+    });
+  }
+
+  function refreshGrabKeyNote() {
+    const note = $('#grab-llm');
+    if (!note) return;
+    const key = ($('#setting-llm-key') && $('#setting-llm-key').value || '').trim();
+    note.textContent = key
+      ? 'LLM key saved. Smart grab will use it to pick the video and the timestamp.'
+      : 'No LLM key yet. Add one in Settings — that is the recommended way for Smart grab to choose the video and timestamp.';
+  }
+
+  function hideGrabNudge() {
+    const row = $('#grab-nudge');
+    if (row) row.classList.add('hidden');
   }
 
   async function runGrab(skipIds) {
@@ -738,6 +759,8 @@ function startDesktopStudio() {
     setGrabBusy(true);
     try {
       const preview = await window.api.grabPreview({ query, skipIds: skipIds || [] });
+      grabMode = 'quick';
+      hideGrabNudge();
       grabId = preview.grabId;
       grabSkip = (skipIds || []).concat(preview.videoId ? [preview.videoId] : []);
       $('#grab-card').classList.remove('hidden');
@@ -760,9 +783,65 @@ function startDesktopStudio() {
     }
   }
 
+  function showSmartPreview(preview) {
+    grabMode = 'smart';
+    grabId = preview.grabId;
+    $('#grab-card').classList.remove('hidden');
+    const nudge = $('#grab-nudge');
+    if (nudge) nudge.classList.remove('hidden');
+    $('#grab-title').textContent = preview.title || grabRequest;
+    $('#grab-meta').textContent = [preview.rangeLabel, preview.lengthLabel, preview.viaLabel].filter(Boolean).join(' · ');
+    const player = $('#grab-player');
+    player.pause();
+    const bytes = preview.bytes;
+    const raw = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    if (grabAudioUrl) URL.revokeObjectURL(grabAudioUrl);
+    grabAudioUrl = URL.createObjectURL(new Blob([raw], { type: preview.mime || 'audio/mpeg' }));
+    player.src = grabAudioUrl;
+    const when = preview.startLabel || (preview.rangeLabel || '').split('–')[0] || 'the chosen time';
+    $('#grab-note').textContent = `Starts at ${when} in “${preview.title || 'the video'}”. Save it, nudge the cut, or try another.`;
+    return player.play().catch((err) => console.error(err));
+  }
+
+  async function runSmart(extra) {
+    refreshGrabKeyNote();
+    showError($('#grab-error'), '');
+    const body = extra || {};
+    const query = body.another || body.nudge ? grabRequest : $('#grab-query').value.trim();
+    if (!query) {
+      showError($('#grab-error'), 'Type a sound to grab');
+      return;
+    }
+    grabRequest = query;
+    const previousNote = $('#grab-note').textContent;
+    const waiting = body.nudge
+      ? 'Cutting that section again…'
+      : (body.another ? 'Trying the next moment…' : 'Finding that moment…');
+    $('#grab-note').textContent = waiting;
+    setGrabBusy(true);
+    try {
+      const preview = await window.api.grabPreview({
+        mode: 'smart',
+        query,
+        grabId: body.another || body.nudge ? grabId : '',
+        another: !!body.another,
+        nudge: body.nudge || '',
+      });
+      await showSmartPreview(preview);
+    } catch (err) {
+      showError($('#grab-error'), err.message || 'Could not grab that moment.');
+      $('#grab-note').textContent = grabMode === 'smart' ? previousNote : '';
+    } finally {
+      setGrabBusy(false);
+    }
+  }
+
   $('#grab-go').addEventListener('click', () => {
     grabSkip = [];
     runGrab([]).catch((err) => showError($('#grab-error'), err.message));
+  });
+  $('#grab-smart').addEventListener('click', () => {
+    runSmart({}).catch((err) => showError($('#grab-error'), err.message));
   });
   $('#grab-query').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
@@ -771,7 +850,17 @@ function startDesktopStudio() {
     }
   });
   $('#grab-another').addEventListener('click', () => {
-    runGrab(grabSkip).catch((err) => showError($('#grab-error'), err.message));
+    const run = grabMode === 'smart'
+      ? runSmart({ another: true })
+      : runGrab(grabSkip);
+    Promise.resolve(run).catch((err) => showError($('#grab-error'), err.message));
+  });
+  ['earlier', 'later', 'shorter', 'longer'].forEach((direction) => {
+    const button = $(`#grab-${direction}`);
+    if (!button) return;
+    button.addEventListener('click', () => {
+      runSmart({ nudge: direction }).catch((err) => showError($('#grab-error'), err.message));
+    });
   });
   $('#grab-save').addEventListener('click', async () => {
     if (!grabId) return;
@@ -804,6 +893,7 @@ function startDesktopStudio() {
     if (window.mithiumMixRefresh) window.mithiumMixRefresh();
   };
 
+  refreshGrabKeyNote();
   if (!window.MithiumMixEditor) redraw();
   enumerateInputs().catch((err) => showError(errorEl, err.message));
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {

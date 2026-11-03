@@ -734,6 +734,9 @@ ipcMain.handle('library:import', async (_e, payload) => {
 
 ipcMain.handle('grab:preview', async (_e, payload) => {
   const body = payload || {};
+  if (body.mode === 'smart' || body.nudge || body.another) {
+    return studio.previewSmartGrab(body);
+  }
   const preview = await studio.previewGrab({ query: body.query, skipIds: body.skipIds });
   return preview;
 });

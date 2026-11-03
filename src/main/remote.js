@@ -447,7 +447,9 @@ async function startServer(opts = {}) {
   expressApp.post('/api/grab', authMiddleware, async (req, res) => {
     try {
       const body = req.body || {};
-      const preview = await studio.previewGrab({ query: body.query, skipIds: body.skipIds });
+      const preview = (body.mode === 'smart' || body.nudge || body.another)
+        ? await studio.previewSmartGrab(body)
+        : await studio.previewGrab({ query: body.query, skipIds: body.skipIds });
       res.json({
         grabId: preview.grabId,
         videoId: preview.videoId,
@@ -456,6 +458,10 @@ async function startServer(opts = {}) {
         sourceUrl: preview.sourceUrl,
         durationMs: preview.durationMs,
         lengthLabel: preview.lengthLabel,
+        mode: preview.mode || '',
+        rangeLabel: preview.rangeLabel || '',
+        startLabel: preview.startLabel || '',
+        viaLabel: preview.viaLabel || '',
       });
     } catch (err) {
       console.error('API error (grab):', err);

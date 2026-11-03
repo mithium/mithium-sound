@@ -1,7 +1,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { isYoutubeUrl } = require('../renderer/timecode');
+const { formatClock, isYoutubeUrl } = require('../renderer/timecode');
 
 function parseTimestamp(ts) {
   const parts = ts.split(':').map(Number);
@@ -308,12 +308,142 @@ async function searchVideos({ query, ytdlpPath, limit = 8, timeoutMs = 40000 }) 
   return result.stdout;
 }
 
+function isMissingYtdlpError(err) {
+  return !!(err && /Couldn't find the YouTube downloader|couldn't start/i.test(String(err.message || '')));
+}
+
+async function captureWithCookieRetry(ytdlpPath, buildArgs, timeoutMs) {
+  const first = await runYtdlpCapture(ytdlpPath, buildArgs(), timeoutMs);
+  if (first.code === 0 && !first.timedOut) return first;
+  if (first.timedOut) throw new Error(ytdlpTimeoutMessage());
+  if (!shouldRetryWithCookies(first.stderr)) throwYtdlpFailure(first.stderr);
+  const retry = await runYtdlpCapture(ytdlpPath, buildArgs('chrome'), timeoutMs);
+  if (retry.timedOut) throw new Error(ytdlpTimeoutMessage());
+  if (retry.code !== 0) throwYtdlpFailure(`${first.stderr || ''}\n${retry.stderr || ''}`);
+  return retry;
+}
+
+function parseJsonLoose(stdout) {
+  const text = String(stdout || '');
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  try {
+    return JSON.parse(text.slice(start));
+  } catch {
+    return null;
+  }
+}
+
+async function probeVideo({ url, ytdlpPath, timeoutMs = 25000 }) {
+  const target = String(url || '').trim();
+  if (!/^https?:\/\//i.test(target)) throw new Error('Paste a video link to grab from.');
+  const result = await captureWithCookieRetry(ytdlpPath, (cookies) => {
+    const args = ['--skip-download', '--no-warnings', '--no-playlist', '-J'];
+    if (cookies) args.push('--cookies-from-browser', cookies);
+    args.push(target);
+    return args;
+  }, timeoutMs);
+  const data = parseJsonLoose(result.stdout);
+  if (!data || (!data.id && !data.title)) throw new Error("Couldn't read that video.");
+  return data;
+}
+
+function readSubtitleFile(outputDir) {
+  if (!outputDir || !fs.existsSync(outputDir)) return '';
+  const files = fs.readdirSync(outputDir).filter((name) => name.toLowerCase().endsWith('.vtt'));
+  if (!files.length) return '';
+  files.sort((a, b) => fs.statSync(path.join(outputDir, b)).size - fs.statSync(path.join(outputDir, a)).size);
+  return fs.readFileSync(path.join(outputDir, files[0]), 'utf8');
+}
+
+async function downloadSubtitles({ url, ytdlpPath, outputDir, ffmpegDir, timeoutMs = 30000 }) {
+  fs.mkdirSync(outputDir, { recursive: true });
+  const template = path.join(outputDir, 'sub');
+  try {
+    await captureWithCookieRetry(ytdlpPath, (cookies) => {
+      const args = [
+        '--skip-download', '--no-playlist', '--no-warnings',
+        '--write-subs', '--write-auto-subs',
+        '--sub-langs', 'en.*,en',
+        '--convert-subs', 'vtt',
+        '-o', template,
+      ];
+      if (ffmpegDir) args.push('--ffmpeg-location', ffmpegDir);
+      if (cookies) args.push('--cookies-from-browser', cookies);
+      args.push(url);
+      return args;
+    }, timeoutMs);
+  } catch (err) {
+    if (isMissingYtdlpError(err)) throw err;
+  }
+  return readSubtitleFile(outputDir);
+}
+
+function resolveDownloaded(outputPath) {
+  if (outputPath && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 128) return outputPath;
+  const dir = path.dirname(outputPath);
+  const base = path.basename(outputPath, path.extname(outputPath));
+  if (!fs.existsSync(dir)) return '';
+  const found = fs.readdirSync(dir)
+    .filter((name) => name.startsWith(base) && /\.(mp3|m4a|webm|opus|ogg)$/i.test(name))
+    .sort((a, b) => fs.statSync(path.join(dir, b)).size - fs.statSync(path.join(dir, a)).size)[0];
+  return found ? path.join(dir, found) : '';
+}
+
+async function downloadAudioSection({
+  url,
+  startSec,
+  endSec,
+  outputPath,
+  ytdlpPath,
+  ffmpegDir,
+  low = true,
+  timeoutMs = 50000,
+}) {
+  const start = Math.max(0, Math.floor(Number(startSec) || 0));
+  const end = Math.ceil(Number(endSec));
+  const useSection = Number.isFinite(end) && end > start;
+  const build = (cookies, format) => {
+    const args = [
+      '-x', '--audio-format', 'mp3',
+      '--audio-quality', low ? '9' : '0',
+      '--no-playlist', '--no-warnings',
+      '-o', outputPath,
+    ];
+    if (useSection) {
+      args.push('--download-sections', `*${formatClock(start)}-${formatClock(end)}`, '--force-keyframes-at-cuts');
+    }
+    if (format) args.push('-f', format);
+    if (ffmpegDir) args.push('--ffmpeg-location', ffmpegDir);
+    if (cookies) args.push('--cookies-from-browser', cookies);
+    args.push(url);
+    return args;
+  };
+  const attempt = async (format) => {
+    try {
+      await captureWithCookieRetry(ytdlpPath, (cookies) => build(cookies, format), timeoutMs);
+      return resolveDownloaded(outputPath);
+    } catch (err) {
+      if (isMissingYtdlpError(err)) throw err;
+      return '';
+    }
+  };
+  let found = '';
+  if (low) found = await attempt('worstaudio/bestaudio/worst');
+  if (!found) found = await attempt('');
+  if (!found) throw new Error("Couldn't scan that video's audio.");
+  return found;
+}
+
 module.exports = {
   extractClip,
   validateTimestamps,
   probeDuration,
   parseDurationOutput,
   searchVideos,
+  probeVideo,
+  downloadSubtitles,
+  downloadAudioSection,
   isYoutubeUrl,
   explainYtdlpFailure,
   missingYtdlpMessage,

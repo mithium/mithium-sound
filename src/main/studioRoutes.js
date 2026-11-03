@@ -11,6 +11,8 @@ const openverse = require('./openverse');
 const myinstants = require('./myinstants');
 const soundSearch = require('./soundSearch');
 const soundGrab = require('./soundGrab');
+const smartGrab = require('./smartGrab');
+const smartGrabLocate = require('./smartGrabLocate');
 const youtube = require('./youtube');
 const mediaImport = require('./mediaImport');
 const { resolveYtdlpPath } = require('./ytdlpBin');
@@ -535,8 +537,10 @@ async function saveGrab({ grabId, name, groupId }) {
       creator: 'YouTube',
       license: '',
       sourceUrl: grab.sourceUrl,
-      text: [grab.title, grab.sourceUrl].filter(Boolean).join(' '),
+      text: [grab.title, grab.rangeLabel, grab.sourceUrl].filter(Boolean).join(' '),
     },
+    youtubeStart: grab.sectionStart || null,
+    youtubeEnd: grab.sectionEnd || null,
   });
   return soundboard.getSoundById(id);
 }
@@ -553,6 +557,209 @@ function readGrab(grabId) {
   };
 }
 
+function smartHttp(err) {
+  if (err && err.status) return err;
+  const status = err instanceof smartGrab.SmartGrabError ? 404 : 502;
+  return httpError((err && err.message) || 'Could not grab that moment', status);
+}
+
+function smartPreview(grab) {
+  const bytes = fs.readFileSync(grab.filePath);
+  return {
+    mode: 'smart',
+    grabId: grab.grabId,
+    videoId: grab.videoId,
+    title: grab.title,
+    shapedQuery: grab.shapedQuery,
+    sourceUrl: grab.sourceUrl,
+    durationMs: grab.durationMs,
+    lengthLabel: openverse.formatDurationLabel(grab.durationMs),
+    mime: 'audio/mpeg',
+    bytes,
+    rangeLabel: grab.rangeLabel,
+    startLabel: grab.sectionStart,
+    endLabel: grab.sectionEnd,
+    viaLabel: grab.viaLabel,
+  };
+}
+
+async function writeSmartBite(dir, url, section, exactCut) {
+  const stamp = `${Date.now()}-${crypto.randomBytes(2).toString('hex')}`;
+  const rough = path.join(dir, `rough-${stamp}.mp3`);
+  const bite = path.join(dir, `bite-${stamp}.mp3`);
+  try {
+    await youtube.extractClip({
+      url,
+      start: section.start,
+      end: section.end,
+      outputPath: rough,
+      ytdlpPath: ytdlpPath(),
+      ffmpegDir: ffmpegPath() ? path.dirname(ffmpegPath()) : '',
+    });
+    const probe = exactCut
+      ? await mediaImport.cutExact({
+        ffmpegPath: ffmpegPath(),
+        ffprobePath: ffprobePath(),
+        inputPath: rough,
+        outputPath: bite,
+        lengthSec: section.exactSec,
+      })
+      : await mediaImport.trimMainSound({
+        ffmpegPath: ffmpegPath(),
+        ffprobePath: ffprobePath(),
+        inputPath: rough,
+        outputPath: bite,
+        maxSec: section.maxSec,
+      });
+    if (fs.existsSync(rough)) fs.unlinkSync(rough);
+    return { bite, probe };
+  } catch (err) {
+    if (fs.existsSync(rough)) fs.unlinkSync(rough);
+    if (fs.existsSync(bite)) fs.unlinkSync(bite);
+    throw err;
+  }
+}
+
+function applySmartCut(grab, candidate, written) {
+  const previous = grab.filePath;
+  grab.filePath = written.bite;
+  grab.title = candidate.title;
+  grab.videoId = candidate.videoId;
+  grab.sourceUrl = candidate.url;
+  grab.videoDurationSec = candidate.durationSec;
+  grab.durationMs = written.probe.durationMs;
+  grab.startSec = candidate.section.startSec;
+  grab.lengthSec = candidate.section.maxSec;
+  grab.sectionStart = candidate.section.start;
+  grab.sectionEnd = candidate.section.end;
+  grab.rangeLabel = candidate.rangeLabel;
+  grab.viaLabel = candidate.viaLabel;
+  grab.name = clipName(grab.query, candidate.title);
+  if (previous && previous !== written.bite && fs.existsSync(previous)) fs.unlinkSync(previous);
+  return smartPreview(grab);
+}
+
+async function materializeSmart(plan, { query, candidateIndex }) {
+  const candidate = (plan.candidates && plan.candidates[candidateIndex]) || {
+    videoId: plan.videoId,
+    title: plan.title,
+    url: plan.url,
+    durationSec: plan.durationSec,
+    viaLabel: plan.viaLabel,
+    section: plan.section,
+    exactCut: plan.exactCut,
+    rangeLabel: plan.rangeLabel,
+  };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mithium-smart-'));
+  try {
+    const written = await writeSmartBite(dir, candidate.url, candidate.section, candidate.exactCut);
+    const grabId = crypto.randomBytes(8).toString('hex');
+    const grab = {
+      mode: 'smart',
+      grabId,
+      filePath: written.bite,
+      dir,
+      query: String(query || ''),
+      shapedQuery: plan.shapedQuery,
+      title: candidate.title,
+      name: clipName(query, candidate.title),
+      sourceUrl: candidate.url,
+      videoId: candidate.videoId,
+      videoDurationSec: candidate.durationSec,
+      durationMs: written.probe.durationMs,
+      startSec: candidate.section.startSec,
+      lengthSec: candidate.section.maxSec,
+      sectionStart: candidate.section.start,
+      sectionEnd: candidate.section.end,
+      rangeLabel: candidate.rangeLabel,
+      viaLabel: candidate.viaLabel,
+      candidates: plan.candidates || [],
+      candidateIndex,
+    };
+    rememberGrab(grab);
+    return smartPreview(grab);
+  } catch (err) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw smartHttp(err);
+  }
+}
+
+async function previewSmartGrab(body) {
+  const payload = body || {};
+  const grabId = String(payload.grabId || '');
+  if (payload.nudge && grabId) return nudgeSmartGrab(grabId, payload.nudge);
+  if (payload.another && grabId) return anotherSmartGrab(grabId);
+  try {
+    const plan = await smartGrabLocate.planFromRequest({
+      query: payload.query,
+      skipIds: payload.skipIds,
+      llm: {
+        apiKey: settings.get('llmApiKey'),
+        baseUrl: settings.get('llmBaseUrl'),
+        model: settings.get('llmModel'),
+        fetchImpl: payload.fetchImpl,
+      },
+      ytdlpPath: ytdlpPath(),
+      ffmpegPath: ffmpegPath(),
+      ffmpegDir: ffmpegPath() ? path.dirname(ffmpegPath()) : '',
+    });
+    return await materializeSmart(plan, { query: payload.query, candidateIndex: 0 });
+  } catch (err) {
+    throw smartHttp(err);
+  }
+}
+
+async function anotherSmartGrab(grabId) {
+  const grab = grabs.get(String(grabId || ''));
+  if (!grab || grab.mode !== 'smart' || !grab.dir) {
+    throw httpError('That preview expired. Use Smart grab again.', 404);
+  }
+  const next = (grab.candidateIndex || 0) + 1;
+  if (grab.candidates && next < grab.candidates.length) {
+    const candidate = grab.candidates[next];
+    try {
+      const written = await writeSmartBite(grab.dir, candidate.url, candidate.section, candidate.exactCut);
+      grab.candidateIndex = next;
+      return applySmartCut(grab, candidate, written);
+    } catch (err) {
+      throw smartHttp(err);
+    }
+  }
+  const skip = [...new Set((grab.candidates || []).map((item) => item.videoId).concat(grab.videoId || []))];
+  return previewSmartGrab({ query: grab.query, skipIds: skip });
+}
+
+async function nudgeSmartGrab(grabId, direction) {
+  const grab = grabs.get(String(grabId || ''));
+  if (!grab || grab.mode !== 'smart' || !grab.dir || !grab.sourceUrl) {
+    throw httpError('That preview expired. Use Smart grab again.', 404);
+  }
+  let nudged;
+  try {
+    nudged = smartGrab.nudgeSection({
+      startSec: grab.startSec,
+      lengthSec: grab.lengthSec,
+      videoDurationSec: grab.videoDurationSec,
+    }, direction);
+  } catch (err) {
+    throw smartHttp(err);
+  }
+  try {
+    const written = await writeSmartBite(grab.dir, grab.sourceUrl, nudged.section, nudged.exactCut);
+    return applySmartCut(grab, {
+      title: grab.title,
+      videoId: grab.videoId,
+      url: grab.sourceUrl,
+      durationSec: grab.videoDurationSec,
+      viaLabel: grab.viaLabel,
+      section: nudged.section,
+      rangeLabel: nudged.rangeLabel,
+    }, written);
+  } catch (err) {
+    throw smartHttp(err);
+  }
+}
+
 module.exports = {
   saveRecording,
   renderEdit,
@@ -567,6 +774,7 @@ module.exports = {
   previewLibrary,
   importLibrary,
   previewGrab,
+  previewSmartGrab,
   saveGrab,
   readGrab,
   mimeForFilename,

@@ -534,26 +534,11 @@
   let grabSkip = [];
   let grabRequest = '';
   let grabId = '';
+  let grabMode = 'quick';
 
-  async function runGrab(skipIds) {
-    showBox($('#grab-error'), '');
-    const query = (skipIds && skipIds.length) ? grabRequest : $('#grab-query').value.trim();
-    if (!query) {
-      showBox($('#grab-error'), 'Type a sound to grab');
-      return;
-    }
-    grabRequest = query;
-    $('#grab-note').textContent = 'Searching YouTube for a short bite…';
-    const preview = await api('/api/grab', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, skipIds: skipIds || [] }),
-    });
+  async function playGrabPreview(preview) {
     grabId = preview.grabId;
-    grabSkip = (skipIds || []).concat(preview.videoId ? [preview.videoId] : []);
     $('#grab-card').classList.remove('hidden');
-    $('#grab-title').textContent = preview.title || query;
-    $('#grab-meta').textContent = [preview.lengthLabel, preview.shapedQuery].filter(Boolean).join(' · ');
     const slot = $('#grab-preview');
     slot.replaceChildren();
     if (window.mithiumHearOnPhone && window.mithiumHearOnPhone()) {
@@ -574,15 +559,85 @@
       status.textContent = 'Playing on the Windows PC.';
       slot.appendChild(status);
     }
+  }
+
+  async function runGrab(skipIds) {
+    showBox($('#grab-error'), '');
+    const query = (skipIds && skipIds.length) ? grabRequest : $('#grab-query').value.trim();
+    if (!query) {
+      showBox($('#grab-error'), 'Type a sound to grab');
+      return;
+    }
+    grabRequest = query;
+    $('#grab-note').textContent = 'Searching YouTube for a short bite…';
+    const preview = await api('/api/grab', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, skipIds: skipIds || [] }),
+    });
+    grabMode = 'quick';
+    const nudge = $('#grab-nudge');
+    if (nudge) nudge.classList.add('hidden');
+    grabSkip = (skipIds || []).concat(preview.videoId ? [preview.videoId] : []);
+    $('#grab-title').textContent = preview.title || query;
+    $('#grab-meta').textContent = [preview.lengthLabel, preview.shapedQuery].filter(Boolean).join(' · ');
+    await playGrabPreview(preview);
     $('#grab-note').textContent = 'Preview is under the result. Save it, or try another match.';
+  }
+
+  async function runSmart(extra) {
+    const body = extra || {};
+    showBox($('#grab-error'), '');
+    const query = body.another || body.nudge ? grabRequest : $('#grab-query').value.trim();
+    if (!query) {
+      showBox($('#grab-error'), 'Type a sound to grab');
+      return;
+    }
+    grabRequest = query;
+    $('#grab-note').textContent = body.nudge
+      ? 'Cutting that section again…'
+      : (body.another ? 'Trying the next moment…' : 'Finding that moment…');
+    const preview = await api('/api/grab', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'smart',
+        query,
+        grabId: body.another || body.nudge ? grabId : '',
+        another: !!body.another,
+        nudge: body.nudge || '',
+      }),
+    });
+    grabMode = 'smart';
+    const nudge = $('#grab-nudge');
+    if (nudge) nudge.classList.remove('hidden');
+    $('#grab-title').textContent = preview.title || query;
+    $('#grab-meta').textContent = [preview.rangeLabel, preview.lengthLabel, preview.viaLabel].filter(Boolean).join(' · ');
+    await playGrabPreview(preview);
+    const when = preview.startLabel || 'the chosen time';
+    $('#grab-note').textContent = `Starts at ${when} in “${preview.title || 'the video'}”. Save it, nudge the cut, or try another.`;
   }
 
   $('#grab-go').addEventListener('click', () => {
     grabSkip = [];
     runGrab([]).catch((err) => showBox($('#grab-error'), err.message));
   });
+  const grabSmart = $('#grab-smart');
+  if (grabSmart) {
+    grabSmart.addEventListener('click', () => {
+      runSmart({}).catch((err) => showBox($('#grab-error'), err.message));
+    });
+  }
   $('#grab-another').addEventListener('click', () => {
-    runGrab(grabSkip).catch((err) => showBox($('#grab-error'), err.message));
+    const run = grabMode === 'smart' ? runSmart({ another: true }) : runGrab(grabSkip);
+    Promise.resolve(run).catch((err) => showBox($('#grab-error'), err.message));
+  });
+  ['earlier', 'later', 'shorter', 'longer'].forEach((direction) => {
+    const button = $(`#grab-${direction}`);
+    if (!button) return;
+    button.addEventListener('click', () => {
+      runSmart({ nudge: direction }).catch((err) => showBox($('#grab-error'), err.message));
+    });
   });
   $('#grab-save').addEventListener('click', async () => {
     if (!grabId) return;
