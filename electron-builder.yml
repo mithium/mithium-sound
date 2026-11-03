@@ -5,6 +5,8 @@ directories:
 files:
   - src/**/*
   - package.json
+  # ffprobe-static ships every platform. The app uses resources/bin/ffprobe.exe.
+  - "!node_modules/ffprobe-static/**"
 asarUnpack:
   - node_modules/sql.js/dist/**
   - node_modules/@snazzah/davey-win32-x64-msvc/**
@@ -13,6 +15,8 @@ extraResources:
   # Binaries live beside app.asar. Spawn cannot run a file packed inside the archive.
   - from: bin/win/ffmpeg.exe
     to: bin/ffmpeg.exe
+  - from: bin/win/ffprobe.exe
+    to: bin/ffprobe.exe
   - from: bin/win/yt-dlp.exe
     to: bin/yt-dlp.exe
   - from: third_party/yt-dlp/LICENSE

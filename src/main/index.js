@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const { GlobalKeyboardListener } = require('node-global-key-listener');
 
@@ -54,6 +56,22 @@ function setupFFmpeg() {
   }
 }
 setupFFmpeg();
+
+function setupFfprobe() {
+  const { resolveFfprobePath } = require('./ffprobeBin');
+  const ffprobePath = resolveFfprobePath({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    devPath: '',
+  });
+  if (ffprobePath && fs.existsSync(ffprobePath)) {
+    process.env.FFPROBE_BIN = ffprobePath;
+    console.log('Using ffprobe:', ffprobePath);
+  } else {
+    console.error('ffprobe not found at:', ffprobePath);
+  }
+}
+setupFfprobe();
 
 const bot = require('./bot');
 const soundboard = require('./soundboard');
@@ -168,6 +186,9 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url !== mainWindow.webContents.getURL()) event.preventDefault();
+  });
   mainWindow.webContents.openDevTools();
 
   mainWindow.on('close', (event) => {
@@ -583,27 +604,56 @@ ipcMain.handle('sound:getFilePath', (_e, id) => {
   return soundboard.getFilePath(sound.filename);
 });
 
+async function importSoundFiles(filePaths) {
+  const mediaImport = require('./mediaImport');
+  const imported = [];
+  const errors = [];
+  for (const srcPath of filePaths || []) {
+    const label = path.basename(String(srcPath || '')) || 'file';
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mithium-upload-'));
+    const outputPath = path.join(dir, 'imported.mp3');
+    try {
+      const converted = await mediaImport.convertFileToMp3({
+        sourcePath: srcPath,
+        outputPath,
+        ffmpegPath: process.env.FFMPEG_BIN,
+        ffprobePath: process.env.FFPROBE_BIN,
+      });
+      const filename = `${Date.now()}-${crypto.randomBytes(3).toString('hex')}.mp3`;
+      fs.copyFileSync(outputPath, path.join(soundboard.getSoundsDir(), filename));
+      const { id } = soundboard.addSound({
+        name: converted.name,
+        filename,
+        sourceType: 'local',
+        durationMs: converted.output.durationMs,
+        mimeType: 'audio/mpeg',
+      });
+      imported.push({ id, name: converted.name, filename });
+    } catch (err) {
+      errors.push(`${label}: ${err.message || 'Could not import'}`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  if (imported.length) libraryMutated();
+  if (!imported.length && errors.length) throw new Error(errors.join('\n'));
+  return { imported, errors };
+}
+
 ipcMain.handle('sound:import', async () => {
+  const mediaImport = require('./mediaImport');
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Import Sound Files',
-    filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'flac', 'webm'] }],
+    filters: mediaImport.importDialogFilters(),
     properties: ['openFile', 'multiSelections'],
   });
-  if (result.canceled || !result.filePaths.length) return [];
+  if (result.canceled || !result.filePaths.length) return { imported: [], errors: [] };
+  return importSoundFiles(result.filePaths);
+});
 
-  const imported = [];
-  for (const srcPath of result.filePaths) {
-    const ext = path.extname(srcPath);
-    const baseName = path.basename(srcPath, ext);
-    const filename = `${Date.now()}-${baseName}${ext}`;
-    const destPath = path.join(soundboard.getSoundsDir(), filename);
-    fs.copyFileSync(srcPath, destPath);
-    const { id } = soundboard.addSound({ name: baseName, filename, sourceType: 'local' });
-    imported.push({ id, name: baseName, filename });
-  }
-  
-  libraryMutated();
-  return imported;
+ipcMain.handle('sound:importPaths', async (_e, filePaths) => {
+  const paths = Array.isArray(filePaths) ? filePaths.filter((item) => typeof item === 'string') : [];
+  return importSoundFiles(paths);
 });
 
 ipcMain.handle('sound:delete', (_e, id) => {
@@ -665,6 +715,31 @@ ipcMain.handle('openverse:preview', async (_e, id) => {
 
 ipcMain.handle('openverse:import', async (_e, payload) => {
   const sound = await studio.importOpenverse(payload || {});
+  libraryMutated();
+  return sound;
+});
+
+ipcMain.handle('library:search', (_e, query, page) => studio.searchLibrary(query, page));
+
+ipcMain.handle('library:preview', async (_e, id) => {
+  const preview = await studio.previewLibrary(id);
+  return { mime: preview.mime, bytes: preview.bytes, result: preview.result };
+});
+
+ipcMain.handle('library:import', async (_e, payload) => {
+  const sound = await studio.importLibrary(payload || {});
+  libraryMutated();
+  return sound;
+});
+
+ipcMain.handle('grab:preview', async (_e, payload) => {
+  const body = payload || {};
+  const preview = await studio.previewGrab({ query: body.query, skipIds: body.skipIds });
+  return preview;
+});
+
+ipcMain.handle('grab:save', async (_e, payload) => {
+  const sound = await studio.saveGrab(payload || {});
   libraryMutated();
   return sound;
 });

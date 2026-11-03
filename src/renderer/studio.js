@@ -580,7 +580,7 @@ function startDesktopStudio() {
     showError($('#ov-error'), '');
     $('#ov-note').textContent = 'Searching…';
     try {
-      const data = await window.api.openverseSearch($('#ov-query').value.trim(), page);
+      const data = await window.api.librarySearch($('#ov-query').value.trim(), page);
       ovPage = data.page || page;
       ovPageCount = data.pageCount || 1;
       ovSearched = true;
@@ -592,7 +592,7 @@ function startDesktopStudio() {
       $('#ov-note').textContent = '';
       ovSearched = true;
       ovResults = [];
-      showError($('#ov-error'), err.message || 'Openverse is unreachable. Recording and the soundboard still work offline.');
+      showError($('#ov-error'), err.message || 'Sound search is unreachable. Recording and the soundboard still work offline.');
       renderOpenverse([]);
     }
   }
@@ -608,7 +608,7 @@ function startDesktopStudio() {
       title.textContent = result.title;
       const meta = document.createElement('p');
       meta.className = 'ov-meta';
-      meta.textContent = `${result.creator} · ${result.license || 'License unknown'}`;
+      meta.textContent = `${result.source || 'MyInstants'} · ${result.creator} · ${result.license || 'License unknown'}`;
       if (result.lengthLabel) {
         meta.appendChild(document.createTextNode(' · '));
         const length = document.createElement('span');
@@ -667,7 +667,7 @@ function startDesktopStudio() {
     slot.appendChild(status);
     slot.appendChild(player);
     try {
-      const preview = await window.api.openversePreview(id);
+      const preview = await window.api.libraryPreview(id);
       const bytes = preview.bytes;
       const raw = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
       const blob = new Blob([raw], { type: preview.mime || 'audio/mpeg' });
@@ -687,13 +687,13 @@ function startDesktopStudio() {
       player.classList.add('hidden');
       if (player.parentNode) player.parentNode.removeChild(player);
       if (status.isConnected) status.remove();
-      showError($('#ov-error'), err.message || 'Openverse is unreachable. Recording and the soundboard still work offline.');
+      showError($('#ov-error'), err.message || 'Sound search is unreachable. Recording and the soundboard still work offline.');
     }
   }
 
   async function importResult(result) {
     showError($('#ov-error'), '');
-    const sound = await window.api.openverseImport({
+    const sound = await window.api.libraryImport({
       id: result.id,
       name: result.title,
       groupId: selectedGroup('#ov-group'),
@@ -715,6 +715,83 @@ function startDesktopStudio() {
     showCappedResults();
   });
 
+  let grabSkip = [];
+  let grabRequest = '';
+  let grabId = '';
+  let grabAudioUrl = null;
+
+  function setGrabBusy(busy) {
+    $('#grab-go').disabled = busy;
+    $('#grab-save').disabled = busy;
+    $('#grab-another').disabled = busy;
+  }
+
+  async function runGrab(skipIds) {
+    showError($('#grab-error'), '');
+    const query = (skipIds && skipIds.length) ? grabRequest : $('#grab-query').value.trim();
+    if (!query) {
+      showError($('#grab-error'), 'Type a sound to grab');
+      return;
+    }
+    grabRequest = query;
+    $('#grab-note').textContent = 'Searching YouTube for a short bite…';
+    setGrabBusy(true);
+    try {
+      const preview = await window.api.grabPreview({ query, skipIds: skipIds || [] });
+      grabId = preview.grabId;
+      grabSkip = (skipIds || []).concat(preview.videoId ? [preview.videoId] : []);
+      $('#grab-card').classList.remove('hidden');
+      $('#grab-title').textContent = preview.title || query;
+      $('#grab-meta').textContent = [preview.lengthLabel, preview.shapedQuery].filter(Boolean).join(' · ');
+      const player = $('#grab-player');
+      player.pause();
+      const bytes = preview.bytes;
+      const raw = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      if (grabAudioUrl) URL.revokeObjectURL(grabAudioUrl);
+      grabAudioUrl = URL.createObjectURL(new Blob([raw], { type: preview.mime || 'audio/mpeg' }));
+      player.src = grabAudioUrl;
+      $('#grab-note').textContent = 'Preview is under the result. Save it, or try another match.';
+      try { await player.play(); } catch (err) { console.error(err); }
+    } catch (err) {
+      showError($('#grab-error'), err.message || 'Could not grab that sound.');
+      $('#grab-note').textContent = '';
+    } finally {
+      setGrabBusy(false);
+    }
+  }
+
+  $('#grab-go').addEventListener('click', () => {
+    grabSkip = [];
+    runGrab([]).catch((err) => showError($('#grab-error'), err.message));
+  });
+  $('#grab-query').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      grabSkip = [];
+      runGrab([]).catch((err) => showError($('#grab-error'), err.message));
+    }
+  });
+  $('#grab-another').addEventListener('click', () => {
+    runGrab(grabSkip).catch((err) => showError($('#grab-error'), err.message));
+  });
+  $('#grab-save').addEventListener('click', async () => {
+    if (!grabId) return;
+    showError($('#grab-error'), '');
+    setGrabBusy(true);
+    try {
+      const sound = await window.api.grabSave({
+        grabId,
+        name: grabRequest,
+        groupId: selectedGroup('#grab-group'),
+      });
+      if (window.mithiumRefresh) await window.mithiumRefresh();
+      $('#grab-note').textContent = `Saved “${sound.name}”.`;
+    } catch (err) {
+      showError($('#grab-error'), err.message || 'Could not save that sound.');
+    } finally {
+      setGrabBusy(false);
+    }
+  });
+
   window.mithiumEditClip = (id) => {
     const tab = document.querySelector('.tab[data-tab="record"]');
     if (tab) tab.click();
@@ -723,6 +800,7 @@ function startDesktopStudio() {
   window.mithiumStudioRefresh = () => {
     fillGroups($('#edit-group'));
     fillGroups($('#ov-group'));
+    fillGroups($('#grab-group'));
     if (window.mithiumMixRefresh) window.mithiumMixRefresh();
   };
 

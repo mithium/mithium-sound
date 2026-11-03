@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   // Bot
@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('api', {
   soundStop: () => ipcRenderer.invoke('sound:stop'),
   soundGetFilePath: (id) => ipcRenderer.invoke('sound:getFilePath', id),
   soundImport: () => ipcRenderer.invoke('sound:import'),
+  soundImportPaths: (paths) => ipcRenderer.invoke('sound:importPaths', paths),
+  pathForFile: (file) => webUtils.getPathForFile(file),
   soundDelete: (id) => ipcRenderer.invoke('sound:delete', id),
   soundRename: (id, name) => ipcRenderer.invoke('sound:rename', id, name),
   soundAssignToGroup: (soundId, groupId) => ipcRenderer.invoke('sound:assignToGroup', soundId, groupId),
@@ -27,6 +29,11 @@ contextBridge.exposeInMainWorld('api', {
   openverseSearch: (query, page) => ipcRenderer.invoke('openverse:search', query, page),
   openversePreview: (id) => ipcRenderer.invoke('openverse:preview', id),
   openverseImport: (payload) => ipcRenderer.invoke('openverse:import', payload),
+  librarySearch: (query, page) => ipcRenderer.invoke('library:search', query, page),
+  libraryPreview: (id) => ipcRenderer.invoke('library:preview', id),
+  libraryImport: (payload) => ipcRenderer.invoke('library:import', payload),
+  grabPreview: (payload) => ipcRenderer.invoke('grab:preview', payload),
+  grabSave: (payload) => ipcRenderer.invoke('grab:save', payload),
 
   // Groups
   groupGetAll: () => ipcRenderer.invoke('group:getAll'),

@@ -286,11 +286,34 @@ async function probeDuration({ url, ytdlpPath, timeoutMs = 25000 }) {
   throwYtdlpFailure(`${first.stderr || ''}\n${retry.stderr || ''}`);
 }
 
+function searchArgs(query, limit, cookiesBrowser) {
+  const count = Math.min(12, Math.max(1, Number(limit) || 8));
+  const args = ['--flat-playlist', '--dump-single-json', '--no-warnings', '--skip-download'];
+  if (cookiesBrowser) args.push('--cookies-from-browser', cookiesBrowser);
+  args.push(`ytsearch${count}:${query}`);
+  return args;
+}
+
+async function searchVideos({ query, ytdlpPath, limit = 8, timeoutMs = 40000 }) {
+  const q = String(query || '').trim();
+  if (!q) throw new Error('Type a sound to grab');
+  const attempt = (cookiesBrowser) => runYtdlpCapture(ytdlpPath, searchArgs(q, limit, cookiesBrowser), timeoutMs);
+  const first = await attempt();
+  let result = first;
+  if (result.code !== 0 && !result.timedOut && shouldRetryWithCookies(result.stderr)) {
+    result = await attempt('chrome');
+  }
+  if (result.timedOut) throw new Error(ytdlpTimeoutMessage());
+  if (result.code !== 0) throwYtdlpFailure(result.stderr);
+  return result.stdout;
+}
+
 module.exports = {
   extractClip,
   validateTimestamps,
   probeDuration,
   parseDurationOutput,
+  searchVideos,
   isYoutubeUrl,
   explainYtdlpFailure,
   missingYtdlpMessage,

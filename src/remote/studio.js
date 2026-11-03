@@ -351,6 +351,8 @@
       $('#main').classList.toggle('hidden', panel !== 'board');
       $('#record-panel').classList.toggle('hidden', panel !== 'record');
       $('#openverse-panel').classList.toggle('hidden', panel !== 'openverse');
+      const grabPanel = $('#grab-panel');
+      if (grabPanel) grabPanel.classList.toggle('hidden', panel !== 'grab');
     });
   });
 
@@ -362,29 +364,49 @@
   window.mithiumRemoteRefresh = () => {
     fillGroups($('#edit-group'));
     fillGroups($('#ov-group'));
+    fillGroups($('#grab-group'));
     if (window.mithiumMixRefresh) window.mithiumMixRefresh();
   };
 
   let ovPage = 1;
   let ovPageCount = 1;
+  let ovResults = [];
+  let ovSearched = false;
+
+  function lengthCapMs() {
+    const caps = window.MithiumLengthCap;
+    const select = $('#ov-cap');
+    return caps && select ? caps.capMs(select.value) : 30000;
+  }
+
+  function resultsForCap(results) {
+    const caps = window.MithiumLengthCap;
+    const cap = lengthCapMs();
+    return (results || []).filter((result) => (caps ? caps.matches(result.durationMs, cap) : true));
+  }
 
   async function runSearch(page) {
     showBox($('#ov-error'), '');
     $('#ov-note').textContent = 'Searching…';
     try {
-      const data = await api(`/api/openverse/search?q=${encodeURIComponent($('#ov-query').value.trim())}&page=${page}`);
+      const data = await api(`/api/library/search?q=${encodeURIComponent($('#ov-query').value.trim())}&page=${page}`);
       ovPage = data.page || page;
       ovPageCount = data.pageCount || 1;
-      const count = data.results && data.results.length;
-      $('#ov-note').textContent = count
-        ? 'Short sound effects'
+      ovResults = data.results || [];
+      ovSearched = true;
+      const visible = resultsForCap(ovResults);
+      $('#ov-note').textContent = visible.length
+        ? (lengthCapMs() === 10000 ? '10 seconds and under' : '30 seconds and under')
         : (ovPage < ovPageCount ? 'No short sound effects on this page.' : 'No short sound effects.');
-      renderResults(data.results || []);
+      if (data.freesoundError) showBox($('#ov-error'), data.freesoundError);
+      renderResults(visible);
       $('#ov-prev').classList.toggle('hidden', ovPage <= 1);
       $('#ov-next').classList.toggle('hidden', ovPage >= ovPageCount);
     } catch (err) {
       $('#ov-note').textContent = '';
-      showBox($('#ov-error'), err.message || 'Openverse is unreachable.');
+      ovSearched = true;
+      ovResults = [];
+      showBox($('#ov-error'), err.message || 'Sound search is unreachable.');
       renderResults([]);
     }
   }
@@ -399,7 +421,7 @@
       title.textContent = result.title;
       const meta = document.createElement('p');
       meta.className = 'ov-meta';
-      meta.textContent = `${result.creator} · ${result.license || 'License unknown'}`;
+      meta.textContent = `${result.source || 'MyInstants'} · ${result.creator} · ${result.license || 'License unknown'}`;
       if (result.lengthLabel) {
         meta.appendChild(document.createTextNode(' · '));
         const length = document.createElement('span');
@@ -421,37 +443,65 @@
       const preview = document.createElement('button');
       preview.type = 'button';
       preview.textContent = 'Preview';
-      preview.addEventListener('click', () => previewResult(result.id).catch((err) => showBox($('#ov-error'), err.message)));
+      preview.addEventListener('click', () => previewResult(result.id, card).catch((err) => showBox($('#ov-error'), err.message)));
       const add = document.createElement('button');
       add.type = 'button';
       add.textContent = 'Add';
       add.addEventListener('click', () => importResult(result).catch((err) => showBox($('#ov-error'), err.message)));
+      const slot = document.createElement('div');
+      slot.className = 'ov-preview';
       actions.appendChild(preview);
       actions.appendChild(add);
       card.appendChild(title);
       card.appendChild(meta);
       card.appendChild(actions);
+      card.appendChild(slot);
       host.appendChild(card);
     });
   }
 
-  async function previewResult(id) {
+  async function previewResult(id, card) {
+    const slot = card && card.querySelector('.ov-preview');
+    if (slot) {
+      slot.replaceChildren();
+      const status = document.createElement('p');
+      status.className = 'ov-preview-status';
+      status.textContent = 'Loading preview…';
+      slot.appendChild(status);
+    }
     if (window.mithiumHearOnPhone && window.mithiumHearOnPhone()) {
       const headers = state().authHeaders();
-      const response = await fetch(`/api/openverse/preview/${encodeURIComponent(id)}`, { headers });
+      const response = await fetch(`/api/library/preview/${encodeURIComponent(id)}`, { headers });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || 'Preview failed');
       }
-      await window.mithiumPlayOnPhone(await response.blob());
+      const blob = await response.blob();
+      if (slot) {
+        slot.replaceChildren();
+        const player = document.createElement('audio');
+        player.controls = true;
+        player.src = URL.createObjectURL(blob);
+        slot.appendChild(player);
+        try { await player.play(); } catch (err) { console.error(err); }
+      } else if (window.mithiumPlayOnPhone) {
+        await window.mithiumPlayOnPhone(blob);
+      }
       return;
     }
     if (window.mithiumStopPhonePlayback) window.mithiumStopPhonePlayback();
-    await api(`/api/openverse/preview/${encodeURIComponent(id)}/play`, { method: 'POST' });
+    await api(`/api/library/preview/${encodeURIComponent(id)}/play`, { method: 'POST' });
+    if (slot) {
+      slot.replaceChildren();
+      const status = document.createElement('p');
+      status.className = 'ov-preview-status';
+      status.textContent = 'Playing on the Windows PC.';
+      slot.appendChild(status);
+    }
   }
 
   async function importResult(result) {
-    const data = await api('/api/openverse/import', {
+    const data = await api('/api/library/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -469,6 +519,87 @@
   });
   $('#ov-prev').addEventListener('click', () => runSearch(Math.max(1, ovPage - 1)));
   $('#ov-next').addEventListener('click', () => runSearch(ovPage + 1));
+  const ovCap = $('#ov-cap');
+  if (ovCap) {
+    ovCap.addEventListener('change', () => {
+      if (!ovSearched) return;
+      const visible = resultsForCap(ovResults);
+      $('#ov-note').textContent = visible.length
+        ? (lengthCapMs() === 10000 ? '10 seconds and under' : '30 seconds and under')
+        : 'Nothing on this page matches that length.';
+      renderResults(visible);
+    });
+  }
+
+  let grabSkip = [];
+  let grabRequest = '';
+  let grabId = '';
+
+  async function runGrab(skipIds) {
+    showBox($('#grab-error'), '');
+    const query = (skipIds && skipIds.length) ? grabRequest : $('#grab-query').value.trim();
+    if (!query) {
+      showBox($('#grab-error'), 'Type a sound to grab');
+      return;
+    }
+    grabRequest = query;
+    $('#grab-note').textContent = 'Searching YouTube for a short bite…';
+    const preview = await api('/api/grab', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, skipIds: skipIds || [] }),
+    });
+    grabId = preview.grabId;
+    grabSkip = (skipIds || []).concat(preview.videoId ? [preview.videoId] : []);
+    $('#grab-card').classList.remove('hidden');
+    $('#grab-title').textContent = preview.title || query;
+    $('#grab-meta').textContent = [preview.lengthLabel, preview.shapedQuery].filter(Boolean).join(' · ');
+    const slot = $('#grab-preview');
+    slot.replaceChildren();
+    if (window.mithiumHearOnPhone && window.mithiumHearOnPhone()) {
+      const headers = state().authHeaders();
+      const response = await fetch(`/api/grab/${encodeURIComponent(grabId)}/audio`, { headers });
+      if (!response.ok) throw new Error('Preview failed');
+      const blob = await response.blob();
+      const player = document.createElement('audio');
+      player.controls = true;
+      player.src = URL.createObjectURL(blob);
+      slot.appendChild(player);
+      try { await player.play(); } catch (err) { console.error(err); }
+    } else {
+      if (window.mithiumStopPhonePlayback) window.mithiumStopPhonePlayback();
+      await api(`/api/grab/${encodeURIComponent(grabId)}/play`, { method: 'POST' });
+      const status = document.createElement('p');
+      status.className = 'ov-preview-status';
+      status.textContent = 'Playing on the Windows PC.';
+      slot.appendChild(status);
+    }
+    $('#grab-note').textContent = 'Preview is under the result. Save it, or try another match.';
+  }
+
+  $('#grab-go').addEventListener('click', () => {
+    grabSkip = [];
+    runGrab([]).catch((err) => showBox($('#grab-error'), err.message));
+  });
+  $('#grab-another').addEventListener('click', () => {
+    runGrab(grabSkip).catch((err) => showBox($('#grab-error'), err.message));
+  });
+  $('#grab-save').addEventListener('click', async () => {
+    if (!grabId) return;
+    try {
+      const data = await api(`/api/grab/${encodeURIComponent(grabId)}/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: grabRequest,
+          groupId: $('#grab-group').value || null,
+        }),
+      });
+      $('#grab-note').textContent = `Saved “${data.sound.name}”.`;
+    } catch (err) {
+      showBox($('#grab-error'), err.message || 'Could not save that sound.');
+    }
+  });
 
   async function showSecureBanner() {
     if (window.isSecureContext) return;
