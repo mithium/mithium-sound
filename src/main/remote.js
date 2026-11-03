@@ -397,6 +397,109 @@ async function startServer(opts = {}) {
     }
   });
 
+  expressApp.get('/api/library/search', authMiddleware, async (req, res) => {
+    try {
+      res.json(await studio.searchLibrary(req.query.q, req.query.page));
+    } catch (err) {
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.get('/api/library/preview/:id', authMiddleware, async (req, res) => {
+    try {
+      const preview = await studio.previewLibrary(req.params.id);
+      res.setHeader('Content-Type', preview.mime || 'audio/mpeg');
+      res.send(preview.bytes);
+    } catch (err) {
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.post('/api/library/preview/:id/play', authMiddleware, async (req, res) => {
+    try {
+      const preview = await studio.previewLibrary(req.params.id);
+      const filePath = path.join(os.tmpdir(), 'mithium-sound-library-preview.mp3');
+      fs.writeFileSync(filePath, preview.bytes);
+      playFileThroughWindows(filePath, {});
+      res.json({ success: true, title: preview.result.title });
+    } catch (err) {
+      console.error('API error (library preview play):', err);
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.post('/api/library/import', authMiddleware, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const sound = await studio.importLibrary({
+        id: body.id,
+        name: body.name,
+        groupId: body.groupId,
+      });
+      changedLibrary();
+      res.status(201).json({ success: true, sound });
+    } catch (err) {
+      console.error('API error (library import):', err);
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.post('/api/grab', authMiddleware, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const preview = await studio.previewGrab({ query: body.query, skipIds: body.skipIds });
+      res.json({
+        grabId: preview.grabId,
+        videoId: preview.videoId,
+        title: preview.title,
+        shapedQuery: preview.shapedQuery,
+        sourceUrl: preview.sourceUrl,
+        durationMs: preview.durationMs,
+        lengthLabel: preview.lengthLabel,
+      });
+    } catch (err) {
+      console.error('API error (grab):', err);
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.get('/api/grab/:id/audio', authMiddleware, (req, res) => {
+    try {
+      const audio = studio.readGrab(req.params.id);
+      res.setHeader('Content-Type', audio.mime);
+      res.send(audio.bytes);
+    } catch (err) {
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.post('/api/grab/:id/play', authMiddleware, (req, res) => {
+    try {
+      const audio = studio.readGrab(req.params.id);
+      const filePath = audio.grab.filePath;
+      playFileThroughWindows(filePath, {});
+      res.json({ success: true, title: audio.grab.title });
+    } catch (err) {
+      sendApiError(res, err);
+    }
+  });
+
+  expressApp.post('/api/grab/:id/save', authMiddleware, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const sound = await studio.saveGrab({
+        grabId: req.params.id,
+        name: body.name,
+        groupId: body.groupId,
+      });
+      changedLibrary();
+      res.status(201).json({ success: true, sound });
+    } catch (err) {
+      console.error('API error (grab save):', err);
+      sendApiError(res, err);
+    }
+  });
+
   expressApp.post('/api/openverse/import', authMiddleware, async (req, res) => {
     try {
       const body = req.body || {};

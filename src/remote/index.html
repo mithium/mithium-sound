@@ -37,7 +37,7 @@
       <input type="checkbox" id="hear-on-phone">
       <span>Hear on this phone</span>
     </label>
-    <p id="hear-hint" class="loaded-hint">Off: clips and Openverse previews play on the Windows PC. On: audition on this phone’s speaker only.</p>
+    <p id="hear-hint" class="loaded-hint">Off: clips and sound previews play on the Windows PC. On: audition on this phone’s speaker only.</p>
     <audio id="phone-player" class="hidden" controls></audio>
   </div>
 
@@ -60,7 +60,8 @@
   <nav id="remote-tabs">
     <button type="button" class="remote-tab active" data-panel="board">Board</button>
     <button type="button" class="remote-tab" data-panel="record">Record</button>
-    <button type="button" class="remote-tab" data-panel="openverse">Openverse</button>
+    <button type="button" class="remote-tab" data-panel="openverse">Sounds</button>
+    <button type="button" class="remote-tab" data-panel="grab">Grab</button>
   </nav>
   <div id="secure-banner" class="secure-banner hidden"></div>
 
@@ -102,11 +103,16 @@
   </section>
 
   <section id="openverse-panel" class="remote-panel hidden">
-    <p class="studio-help">Search Openverse. This needs the Windows PC to be online. The Discord bot token is never sent.</p>
+    <p class="studio-help">Search MyInstants on the Windows PC. Each result shows its length before download. A Freesound key in Settings on the PC adds those results too. The Discord bot token is never sent.</p>
     <div class="studio-inline">
-      <input type="text" id="ov-query" placeholder="door slam, applause" maxlength="200">
+      <input type="text" id="ov-query" placeholder="vine boom, bruh" maxlength="200">
       <button id="ov-search" type="button">Search</button>
     </div>
+    <label class="field-label" for="ov-cap">Maximum length</label>
+    <select id="ov-cap">
+      <option value="30000" selected>30 seconds and under</option>
+      <option value="10000">10 seconds and under</option>
+    </select>
     <label class="field-label" for="ov-group">Add to group</label>
     <select id="ov-group"></select>
     <p id="ov-note" class="studio-help"></p>
@@ -116,6 +122,27 @@
       <button id="ov-prev" type="button" class="hidden">Previous</button>
       <button id="ov-next" type="button" class="hidden">Next</button>
     </div>
+  </section>
+
+  <section id="grab-panel" class="remote-panel hidden">
+    <p class="studio-help">Grab a short YouTube bite on the Windows PC. No key required. About 10 seconds or less.</p>
+    <div class="studio-inline">
+      <input type="text" id="grab-query" placeholder="vine boom" maxlength="180">
+      <button id="grab-go" type="button">Grab</button>
+    </div>
+    <label class="field-label" for="grab-group">Add to group</label>
+    <select id="grab-group"></select>
+    <p id="grab-note" class="studio-help"></p>
+    <p id="grab-error" class="error-text hidden"></p>
+    <article id="grab-card" class="ov-card hidden">
+      <h3 id="grab-title"></h3>
+      <p id="grab-meta" class="ov-meta"></p>
+      <div class="studio-inline">
+        <button id="grab-save" type="button">Save</button>
+        <button id="grab-another" type="button">Try another</button>
+      </div>
+      <div id="grab-preview" class="ov-preview"></div>
+    </article>
   </section>
 
   <!-- Sound Grid -->
@@ -130,6 +157,7 @@
     <span id="error-message"></span>
   </div>
 
+  <script src="/shared/lengthCap.js"></script>
   <script src="/shared/playbackTarget.js"></script>
   <script src="/shared/mixSession.js"></script>
   <script src="/shared/mixEditor.js"></script>

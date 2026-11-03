@@ -28,6 +28,10 @@ const DEFAULTS = {
   recordDeviceId: '',
   recordDeviceLabel: '',
   remoteHearOnPhone: false,
+  freesoundApiKey: '',
+  llmApiKey: '',
+  llmBaseUrl: '',
+  llmModel: '',
 };
 
 let cache = null;

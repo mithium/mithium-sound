@@ -1130,6 +1130,15 @@ button:disabled {
   margin-top: 8px;
 }
 
+.import-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+body.file-drop {
+  box-shadow: inset 0 0 0 3px var(--accent);
+}
+
 /* ===== Utilities ===== */
 .hidden { display: none !important; }
 .device-note { color: var(--warning); font-size: 12px; line-height: 1.5; margin: 6px 0 0; }

@@ -63,11 +63,12 @@ function assertOutsideAsar(resourcesPath, resolved) {
     return;
   }
   const entries = asar.listPackage(asarPath).map((entry) => entry.replace(/\\/g, '/'));
-  const packedExe = entries.filter((entry) => entry.endsWith('/yt-dlp.exe') || entry.endsWith('yt-dlp.exe'));
+  const base = path.basename(resolved).toLowerCase();
+  const packedExe = entries.filter((entry) => entry.toLowerCase().endsWith(`/${base}`) || entry.toLowerCase() === base);
   if (packedExe.length) {
-    fail(`yt-dlp.exe is inside app.asar: ${packedExe.join(', ')}`);
+    fail(`${base} is inside app.asar: ${packedExe.join(', ')}`);
   }
-  console.log('ok  app.asar does not contain yt-dlp.exe');
+  console.log(`ok  app.asar does not contain ${base}`);
 }
 
 function assertPackagedFile(resourcesPath, name, check) {
@@ -113,6 +114,21 @@ function verifyUnpacked(unpackedDir) {
   if (!fs.existsSync(ffmpegPath)) {
     fail(`bundled ffmpeg missing at ${ffmpegPath}`);
   }
+  const ffprobePath = path.join(resourcesPath, 'bin', 'ffprobe.exe');
+  if (!fs.existsSync(ffprobePath)) fail(`bundled ffprobe missing at ${ffprobePath}`);
+  const ffprobeStat = fs.statSync(ffprobePath);
+  if (!ffprobeStat.isFile() || ffprobeStat.size < 1_000_000) {
+    fail(`ffprobe at ${ffprobePath} is ${ffprobeStat.size} bytes`);
+  }
+  const ffprobeHeader = Buffer.alloc(2);
+  const ffprobeFd = fs.openSync(ffprobePath, 'r');
+  try {
+    fs.readSync(ffprobeFd, ffprobeHeader, 0, 2, 0);
+  } finally {
+    fs.closeSync(ffprobeFd);
+  }
+  if (ffprobeHeader.toString('ascii') !== 'MZ') fail(`ffprobe at ${ffprobePath} is not a Windows executable`);
+  assertOutsideAsar(resourcesPath, ffprobePath);
 
   assertOutsideAsar(resourcesPath, resolved);
   assertPackagedFile(resourcesPath, 'yt-dlp-LICENSE.txt', (text) => /unlicense\.org/i.test(text));
@@ -143,7 +159,12 @@ function verifyZip(distDir) {
     if (!hit) fail(`${name} does not contain resources/bin/yt-dlp.exe`);
     const insideAsar = names.filter((entry) => entry.includes('app.asar') && entry.endsWith('yt-dlp.exe'));
     if (insideAsar.length) fail(`${name} packs yt-dlp.exe inside app.asar: ${insideAsar.join(', ')}`);
+    const ffprobeHit = names.find((entry) => entry === 'resources/bin/ffprobe.exe' || entry.endsWith('/resources/bin/ffprobe.exe'));
+    if (!ffprobeHit) fail(`${name} does not contain resources/bin/ffprobe.exe`);
+    const ffprobeInside = names.filter((entry) => entry.includes('app.asar') && entry.endsWith('ffprobe.exe'));
+    if (ffprobeInside.length) fail(`${name} packs ffprobe.exe inside app.asar: ${ffprobeInside.join(', ')}`);
     console.log(`ok  ${name} contains ${hit}`);
+    console.log(`ok  ${name} contains ${ffprobeHit}`);
   }
 }
 

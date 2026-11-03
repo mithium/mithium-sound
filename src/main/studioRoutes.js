@@ -2,16 +2,37 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { app } = require('electron');
 const soundboard = require('./soundboard');
+const settings = require('./settings');
 const { buildEditTimeline } = require('../shared/editPlan');
 const clipEdit = require('./clipEdit');
 const openverse = require('./openverse');
+const myinstants = require('./myinstants');
+const soundSearch = require('./soundSearch');
+const soundGrab = require('./soundGrab');
+const youtube = require('./youtube');
+const mediaImport = require('./mediaImport');
+const { resolveYtdlpPath } = require('./ytdlpBin');
 
 const previewCache = new Map();
 const scratches = new Map();
 
 function ffmpegPath() {
   return process.env.FFMPEG_BIN || '';
+}
+
+function ffprobePath() {
+  return process.env.FFPROBE_BIN || '';
+}
+
+function ytdlpPath() {
+  return resolveYtdlpPath({
+    customPath: settings.get('ytdlpPath'),
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    devPath: path.join(__dirname, '..', '..', 'bin', 'win', 'yt-dlp.exe'),
+  });
 }
 
 function httpError(message, status) {
@@ -328,6 +349,210 @@ async function renderMix({ name, groupId, clips, sources, save }) {
   return { sound, filePath: outputPath };
 }
 
+async function searchLibrary(query, page) {
+  try {
+    return await soundSearch.searchSounds(query, {
+      page: Number(page) || 1,
+      freesoundToken: settings.get('freesoundApiKey'),
+    });
+  } catch (err) {
+    if (err instanceof myinstants.SoundSearchError && !err.status) {
+      err.status = err.offline ? 503 : 400;
+    }
+    throw err;
+  }
+}
+
+async function bytesToMp3(bytes, stem) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mithium-import-'));
+  const sourcePath = path.join(dir, `${stem || 'sound'}.bin`);
+  const outputPath = path.join(dir, 'sound.mp3');
+  fs.writeFileSync(sourcePath, Buffer.from(bytes));
+  try {
+    const converted = await mediaImport.convertFileToMp3({
+      sourcePath,
+      outputPath,
+      ffmpegPath: ffmpegPath(),
+      ffprobePath: ffprobePath(),
+    });
+    return {
+      bytes: fs.readFileSync(outputPath),
+      durationMs: converted.output.durationMs,
+    };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+async function previewLibrary(id) {
+  try {
+    const row = await soundSearch.resolveResult(id, { freesoundToken: settings.get('freesoundApiKey') });
+    const file = await soundSearch.downloadPublic(row.audioUrl, fetch);
+    const mp3 = await bytesToMp3(file.buffer, 'preview');
+    const loaded = { ...row, durationMs: row.durationMs || mp3.durationMs };
+    return {
+      result: soundSearch.publicResult(loaded),
+      mime: 'audio/mpeg',
+      bytes: mp3.bytes,
+    };
+  } catch (err) {
+    if (err instanceof myinstants.SoundSearchError && !err.status) {
+      err.status = err.offline ? 503 : 400;
+    }
+    throw err;
+  }
+}
+
+async function importLibrary({ id, name, groupId }) {
+  try {
+    const preview = await previewLibrary(id);
+    return soundboard.addAudioClip({
+      name: clipName(name, preview.result.title),
+      bytes: preview.bytes,
+      extension: '.mp3',
+      sourceType: preview.result.source === 'Freesound' ? 'freesound' : 'myinstants',
+      groupId: liveGroupId(groupId),
+      durationMs: preview.result.durationMs,
+      mimeType: 'audio/mpeg',
+      attribution: {
+        creator: preview.result.creator,
+        license: preview.result.license,
+        licenseUrl: preview.result.licenseUrl,
+        sourceUrl: preview.result.sourceUrl,
+        text: preview.result.attribution,
+      },
+    });
+  } catch (err) {
+    if (err instanceof myinstants.SoundSearchError && !err.status) {
+      err.status = err.offline ? 503 : 400;
+    }
+    throw err;
+  }
+}
+
+const grabs = new Map();
+
+function rememberGrab(record) {
+  grabs.set(record.grabId, record);
+  while (grabs.size > 8) {
+    const oldest = grabs.keys().next().value;
+    const old = grabs.get(oldest);
+    grabs.delete(oldest);
+    if (old && old.filePath && fs.existsSync(old.filePath)) fs.unlinkSync(old.filePath);
+  }
+}
+
+async function previewGrab({ query, skipIds }) {
+  const shaped = soundGrab.shapeQuery(query);
+  let stdout;
+  try {
+    stdout = await youtube.searchVideos({ query: shaped, ytdlpPath: ytdlpPath(), limit: 8 });
+  } catch (err) {
+    throw httpError(err.message || 'YouTube search failed', 502);
+  }
+  const entries = soundGrab.parseSearchPayload(stdout);
+  let plan;
+  try {
+    plan = await soundGrab.planGrab({
+      request: query,
+      entries,
+      skipIds,
+      llm: {
+        apiKey: settings.get('llmApiKey'),
+        baseUrl: settings.get('llmBaseUrl'),
+        model: settings.get('llmModel'),
+      },
+    });
+  } catch (err) {
+    throw httpError(err.message || 'No short match', 404);
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mithium-grab-'));
+  const rough = path.join(dir, 'rough.mp3');
+  const trimmed = path.join(dir, 'bite.mp3');
+  try {
+    await youtube.extractClip({
+      url: plan.url,
+      start: plan.section.start,
+      end: plan.section.end,
+      outputPath: rough,
+      ytdlpPath: ytdlpPath(),
+      ffmpegDir: ffmpegPath() ? path.dirname(ffmpegPath()) : '',
+    });
+    const trimmedProbe = await mediaImport.trimMainSound({
+      ffmpegPath: ffmpegPath(),
+      ffprobePath: ffprobePath(),
+      inputPath: rough,
+      outputPath: trimmed,
+      maxSec: plan.section.maxSec,
+    });
+    if (fs.existsSync(rough)) fs.unlinkSync(rough);
+    const bytes = fs.readFileSync(trimmed);
+    const grabId = crypto.randomBytes(8).toString('hex');
+    rememberGrab({
+      grabId,
+      filePath: trimmed,
+      dir,
+      title: plan.title,
+      name: clipName(query, plan.title),
+      sourceUrl: plan.url,
+      videoId: plan.videoId,
+      durationMs: trimmedProbe.durationMs,
+    });
+    return {
+      grabId,
+      videoId: plan.videoId,
+      title: plan.title,
+      shapedQuery: plan.shapedQuery,
+      sourceUrl: plan.url,
+      durationMs: trimmedProbe.durationMs,
+      lengthLabel: openverse.formatDurationLabel(trimmedProbe.durationMs),
+      mime: 'audio/mpeg',
+      bytes,
+    };
+  } catch (err) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (err.status) throw err;
+    throw httpError(err.message || 'Could not grab that sound', 502);
+  }
+}
+
+async function saveGrab({ grabId, name, groupId }) {
+  const grab = grabs.get(String(grabId || ''));
+  if (!grab || !grab.filePath || !fs.existsSync(grab.filePath)) {
+    throw httpError('That preview expired. Grab it again.', 404);
+  }
+  const filename = `${Date.now()}-${crypto.randomBytes(3).toString('hex')}.mp3`;
+  const dest = path.join(soundboard.getSoundsDir(), filename);
+  fs.copyFileSync(grab.filePath, dest);
+  const { id } = soundboard.addSound({
+    name: clipName(name, grab.name || grab.title),
+    filename,
+    sourceType: 'youtube',
+    youtubeUrl: grab.sourceUrl,
+    durationMs: grab.durationMs,
+    mimeType: 'audio/mpeg',
+    attribution: {
+      creator: 'YouTube',
+      license: '',
+      sourceUrl: grab.sourceUrl,
+      text: [grab.title, grab.sourceUrl].filter(Boolean).join(' '),
+    },
+  });
+  return soundboard.getSoundById(id);
+}
+
+function readGrab(grabId) {
+  const grab = grabs.get(String(grabId || ''));
+  if (!grab || !grab.filePath || !fs.existsSync(grab.filePath)) {
+    throw httpError('That preview expired. Grab it again.', 404);
+  }
+  return {
+    grab,
+    bytes: fs.readFileSync(grab.filePath),
+    mime: 'audio/mpeg',
+  };
+}
+
 module.exports = {
   saveRecording,
   renderEdit,
@@ -338,5 +563,11 @@ module.exports = {
   searchOpenverse,
   previewOpenverse,
   importOpenverse,
+  searchLibrary,
+  previewLibrary,
+  importLibrary,
+  previewGrab,
+  saveGrab,
+  readGrab,
   mimeForFilename,
 };

@@ -1,4 +1,4 @@
-// Windows Openverse browse caps. Search results are already under 30 seconds.
+// Sound browse caps. Search results are already under 30 seconds.
 // 30 seconds and under keeps that list. 10 seconds and under keeps duration <= 10s.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();

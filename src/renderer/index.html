@@ -32,7 +32,8 @@
   <nav id="tabs">
     <button class="tab active" data-tab="sounds">Soundboard</button>
     <button class="tab" data-tab="record">Record</button>
-    <button class="tab" data-tab="openverse">Openverse</button>
+    <button class="tab" data-tab="openverse">Sounds</button>
+    <button class="tab" data-tab="grab">Grab</button>
     <button class="tab" data-tab="youtube">YouTube</button>
     <button class="tab" data-tab="settings">Settings</button>
   </nav>
@@ -41,6 +42,7 @@
   <section id="tab-sounds" class="tab-content active">
     <div class="toolbar">
       <button id="import-btn">Import Sound</button>
+      <span class="import-hint">Drop audio or video here, including Signal voice notes.</span>
       <button id="create-group-btn">+ New Group</button>
       <button id="stop-btn" class="stop-btn" title="Stop playback and release a held V or T key">⏹ Stop</button>
       <div class="volume-control">
@@ -54,7 +56,7 @@
       <span id="loaded-clip-hold">V/T auto-hold on</span>
     </div>
     <div id="sound-grid" class="sound-grid">
-      <p class="empty-message">No sounds yet. Import audio, record a take, or search Openverse.</p>
+      <p class="empty-message">No sounds yet. Import audio, record a take, search sounds, or grab one.</p>
     </div>
   </section>
 
@@ -115,13 +117,13 @@
     </div>
   </section>
 
-  <!-- Openverse -->
+  <!-- Sounds -->
   <section id="tab-openverse" class="tab-content">
     <div class="studio-block">
-      <h2>Openverse sound effects</h2>
-      <p class="studio-help">Search short Openverse sound effects. Each result shows its length from the search, before the audio file is downloaded. A failed search leaves the soundboard usable.</p>
+      <h2>Sound effects</h2>
+      <p class="studio-help">Search MyInstants for short meme and soundboard effects. Each result shows its length before the file is saved. Add a Freesound API key in Settings to include Freesound too. A failed search leaves the soundboard usable.</p>
       <div class="studio-inline">
-        <input type="text" id="ov-query" placeholder="door slam, applause, beep" maxlength="200">
+        <input type="text" id="ov-query" placeholder="vine boom, bruh, applause" maxlength="200">
         <button id="ov-search" type="button">Search</button>
       </div>
       <div class="form-group">
@@ -142,6 +144,33 @@
         <button id="ov-prev" type="button" class="hidden">Previous</button>
         <button id="ov-next" type="button" class="hidden">Next</button>
       </div>
+    </div>
+  </section>
+
+  <!-- Grab -->
+  <section id="tab-grab" class="tab-content">
+    <div class="studio-block">
+      <h2>Grab a sound</h2>
+      <p class="studio-help">Type something like “vine boom”, “Mario coin”, or “bruh sound effect”. Mithium searches YouTube with the bundled yt-dlp, picks a short match, and keeps about 10 seconds or less. No API key is required. An optional LLM key in Settings can choose among the same results.</p>
+      <div class="studio-inline">
+        <input type="text" id="grab-query" placeholder="vine boom" maxlength="180">
+        <button id="grab-go" type="button">Grab</button>
+      </div>
+      <div class="form-group">
+        <label for="grab-group">Add to group</label>
+        <select id="grab-group"></select>
+      </div>
+      <p id="grab-note" class="studio-help"></p>
+      <p id="grab-error" class="error-text hidden"></p>
+      <article id="grab-card" class="ov-card hidden">
+        <h3 id="grab-title"></h3>
+        <p id="grab-meta" class="ov-meta"></p>
+        <div class="studio-inline">
+          <button id="grab-save" type="button">Save</button>
+          <button id="grab-another" type="button">Try another</button>
+        </div>
+        <audio id="grab-player" class="ov-player" controls></audio>
+      </article>
     </div>
   </section>
 
@@ -228,6 +257,22 @@
         <div class="form-group">
           <label for="setting-ffmpeg">FFmpeg Path</label>
           <input type="text" id="setting-ffmpeg" placeholder="(bundled)">
+        </div>
+        <div class="form-group">
+          <label for="setting-freesound">Freesound API key</label>
+          <input type="password" id="setting-freesound" placeholder="(optional)" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="setting-llm-key">LLM API key</label>
+          <input type="password" id="setting-llm-key" placeholder="(optional, better grab picks)" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="setting-llm-base">LLM base URL</label>
+          <input type="text" id="setting-llm-base" placeholder="https://api.openai.com/v1" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="setting-llm-model">LLM model</label>
+          <input type="text" id="setting-llm-model" placeholder="gpt-4o-mini" autocomplete="off">
         </div>
       </details>
       <div class="form-group">

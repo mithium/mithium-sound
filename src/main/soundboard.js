@@ -307,8 +307,24 @@ function deleteSound(id) {
 }
 
 function renameSound(id, newName) {
-  db.run('UPDATE sounds SET name = ?, updated_at = ?, dirty = 1 WHERE id = ?', [newName, nowIso(), id]);
+  // The on-disk filename and sync_id stay put. Signal clips are stored as
+  // names like "Voice 261011_184715" while the file may also contain spaces,
+  // parentheses, or underscores. Rename only changes the display name.
+  const existing = getSoundById(id);
+  if (!existing) throw new Error('Sound not found');
+  const name = clipName(newName, '');
+  if (!name) throw new Error('Enter a name');
+  db.run(
+    'UPDATE sounds SET name = ?, updated_at = ?, dirty = 1 WHERE id = ?',
+    [name, nowIso(), existing.id]
+  );
   persist();
+  const saved = getSoundById(existing.id);
+  if (!saved || saved.name !== name) throw new Error('Could not save the new name');
+  if (saved.filename !== existing.filename || saved.sync_id !== existing.sync_id) {
+    throw new Error('Rename changed the clip file');
+  }
+  return saved;
 }
 
 function reorderSound(id, newPosition) {

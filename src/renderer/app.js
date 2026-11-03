@@ -233,6 +233,10 @@ async function loadSettings() {
   $('#setting-token').value = s.botToken || '';
   $('#setting-ytdlp').value = window.MithiumYtdlpPath.customPathForSettings(s.ytdlpPath);
   $('#setting-ffmpeg').value = s.ffmpegPath || 'ffmpeg';
+  $('#setting-freesound').value = s.freesoundApiKey || '';
+  $('#setting-llm-key').value = s.llmApiKey || '';
+  $('#setting-llm-base').value = s.llmBaseUrl || '';
+  $('#setting-llm-model').value = s.llmModel || '';
   $('#setting-autoconnect').checked = s.autoConnect || false;
   $('#setting-hold-to-play').checked = s.holdToPlayMode || false;
   $('#setting-output-mode').value = s.outputMode || 'discord';
@@ -264,6 +268,10 @@ async function autoSaveSettings() {
     botToken: $('#setting-token').value,
     ytdlpPath: window.MithiumYtdlpPath.customPathForSettings($('#setting-ytdlp').value),
     ffmpegPath: $('#setting-ffmpeg').value,
+    freesoundApiKey: $('#setting-freesound').value.trim(),
+    llmApiKey: $('#setting-llm-key').value.trim(),
+    llmBaseUrl: $('#setting-llm-base').value.trim(),
+    llmModel: $('#setting-llm-model').value.trim(),
     autoConnect: $('#setting-autoconnect').checked,
     holdToPlayMode: $('#setting-hold-to-play').checked,
     volume: parseInt(volumeSlider.value, 10),
@@ -376,6 +384,10 @@ $('#setting-hold-to-play').addEventListener('change', handleHoldToPlayChange);
 $('#setting-token').addEventListener('blur', autoSaveSettings);
 $('#setting-ytdlp').addEventListener('blur', autoSaveSettings);
 $('#setting-ffmpeg').addEventListener('blur', autoSaveSettings);
+$('#setting-freesound').addEventListener('blur', autoSaveSettings);
+$('#setting-llm-key').addEventListener('blur', autoSaveSettings);
+$('#setting-llm-base').addEventListener('blur', autoSaveSettings);
+$('#setting-llm-model').addEventListener('blur', autoSaveSettings);
 
 // --- Remote Control Settings ---
 let remoteServerRunning = false;
@@ -811,7 +823,7 @@ window.mithiumRefresh = refreshSounds;
 
 function renderSoundGrid() {
   if (sounds.length === 0) {
-    soundGrid.innerHTML = '<p class="empty-message">No sounds yet. Import audio, record a take, or search Openverse.</p>';
+    soundGrid.innerHTML = '<p class="empty-message">No sounds yet. Import audio, record a take, search sounds, or grab one.</p>';
     return;
   }
   
@@ -1130,9 +1142,55 @@ async function playSound(id, opts = {}) {
 }
 
 // --- Import ---
-importBtn.addEventListener('click', async () => {
-  await window.api.soundImport();
+async function reportImport(result) {
   await refreshSounds();
+  const errors = result && result.errors ? result.errors : [];
+  if (!errors.length) return;
+  await showModal({
+    title: 'Some files were not imported',
+    message: errors.join('\n'),
+    confirmText: 'OK',
+  });
+}
+
+importBtn.addEventListener('click', async () => {
+  try {
+    await reportImport(await window.api.soundImport());
+  } catch (err) {
+    await showModal({
+      title: 'Import failed',
+      message: err.message || 'Could not import that file.',
+      confirmText: 'OK',
+    });
+  }
+});
+
+document.addEventListener('dragover', (event) => {
+  if (!event.dataTransfer || ![...event.dataTransfer.types].includes('Files')) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+  document.body.classList.add('file-drop');
+});
+document.addEventListener('dragleave', () => {
+  document.body.classList.remove('file-drop');
+});
+document.addEventListener('drop', async (event) => {
+  if (!event.dataTransfer || !event.dataTransfer.files || !event.dataTransfer.files.length) return;
+  event.preventDefault();
+  document.body.classList.remove('file-drop');
+  const paths = [...event.dataTransfer.files]
+    .map((file) => window.api.pathForFile(file))
+    .filter(Boolean);
+  if (!paths.length) return;
+  try {
+    await reportImport(await window.api.soundImportPaths(paths));
+  } catch (err) {
+    await showModal({
+      title: 'Import failed',
+      message: err.message || 'Could not import that file.',
+      confirmText: 'OK',
+    });
+  }
 });
 
 // --- Create Group ---
@@ -1163,7 +1221,8 @@ function showContextMenu(e, soundId) {
   contextMenu.classList.remove('hidden');
 }
 
-document.addEventListener('click', () => {
+document.addEventListener('click', (event) => {
+  if (contextMenu.contains(event.target)) return;
   contextMenu.classList.add('hidden');
   contextTarget = null;
 });
@@ -1191,9 +1250,14 @@ contextMenu.querySelector('[data-action="edit"]').addEventListener('click', () =
 });
 
 contextMenu.querySelector('[data-action="rename"]').addEventListener('click', async () => {
-  if (!contextTarget) return;
-  const sound = sounds.find((s) => s.id === contextTarget);
-  
+  // The document click handler clears contextTarget. Read the id before the
+  // dialog, or OK on the modal saves nothing. This hit Signal clips whose
+  // names look like "Voice 261011_184715".
+  const id = contextTarget;
+  if (id == null) return;
+  const sound = sounds.find((s) => s.id === id);
+  contextMenu.classList.add('hidden');
+
   const newName = await showModal({
     title: 'Rename Sound',
     message: 'Enter a new name for this sound:',
@@ -1201,29 +1265,31 @@ contextMenu.querySelector('[data-action="rename"]').addEventListener('click', as
     defaultValue: sound?.name || '',
     confirmText: 'Rename'
   });
-  
+
   if (newName && newName.trim()) {
-    await window.api.soundRename(contextTarget, newName.trim());
+    await window.api.soundRename(id, newName.trim());
     await refreshSounds();
   }
 });
 
 contextMenu.querySelector('[data-action="delete"]').addEventListener('click', async () => {
-  if (!contextTarget) return;
-  const sound = sounds.find((s) => s.id === contextTarget);
-  
+  const id = contextTarget;
+  if (id == null) return;
+  const sound = sounds.find((s) => s.id === id);
+  contextMenu.classList.add('hidden');
+
   const confirmed = await showModal({
     title: 'Delete Sound',
     message: `Delete "${sound?.name}"? This cannot be undone.`,
     confirmText: 'Delete',
     cancelText: 'Cancel'
   });
-  
+
   if (confirmed) {
-    if (contextTarget === armedClipId) {
+    if (id === armedClipId) {
       armedClipId = null;
     }
-    await window.api.soundDelete(contextTarget);
+    await window.api.soundDelete(id);
     await refreshSounds();
   }
 });

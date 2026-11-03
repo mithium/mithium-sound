@@ -13,6 +13,8 @@ extraResources:
   # Binaries live beside app.asar. Spawn cannot run a file packed inside the archive.
   - from: bin/win/ffmpeg.exe
     to: bin/ffmpeg.exe
+  - from: bin/win/ffprobe.exe
+    to: bin/ffprobe.exe
   - from: bin/win/yt-dlp.exe
     to: bin/yt-dlp.exe
   - from: third_party/yt-dlp/LICENSE
