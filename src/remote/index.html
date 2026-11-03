@@ -126,9 +126,11 @@
 
   <section id="grab-panel" class="remote-panel hidden">
     <p class="studio-help">Grab a short YouTube bite on the Windows PC. No key required. About 10 seconds or less.</p>
+    <p class="studio-help">Smart grab is separate. It can take a line or a sound from any video, including a long one, and cut the length you ask for (about 5 seconds when you leave it out, 30 seconds max). An LLM key saved in the desktop Settings is the recommended way to pick the moment.</p>
     <div class="studio-inline">
       <input type="text" id="grab-query" placeholder="vine boom" maxlength="180">
       <button id="grab-go" type="button">Grab</button>
+      <button id="grab-smart" type="button">Smart grab</button>
     </div>
     <label class="field-label" for="grab-group">Add to group</label>
     <select id="grab-group"></select>
@@ -140,6 +142,12 @@
       <div class="studio-inline">
         <button id="grab-save" type="button">Save</button>
         <button id="grab-another" type="button">Try another</button>
+      </div>
+      <div id="grab-nudge" class="studio-inline hidden">
+        <button id="grab-earlier" type="button">Earlier</button>
+        <button id="grab-later" type="button">Later</button>
+        <button id="grab-shorter" type="button">Shorter</button>
+        <button id="grab-longer" type="button">Longer</button>
       </div>
       <div id="grab-preview" class="ov-preview"></div>
     </article>

@@ -183,6 +183,41 @@ async function trimMainSound({ ffmpegPath, ffprobePath, inputPath, outputPath, m
   return probe;
 }
 
+const RMS_FILTER = 'aresample=8000,asetnsamples=n=8000:p=0,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level';
+
+async function readRmsMetadata(ffmpegPath, filePath) {
+  const result = await run(ffmpegPath, [
+    '-hide_banner',
+    '-i', filePath,
+    '-af', RMS_FILTER,
+    '-f', 'null',
+    '-',
+  ], { timeoutMs: 60000 });
+  return `${result.stdout || ''}\n${result.stderr || ''}`;
+}
+
+async function cutExact({ ffmpegPath, ffprobePath, inputPath, outputPath, lengthSec }) {
+  const length = Math.min(30, Math.max(1, Number(lengthSec) || 5));
+  const seconds = (Math.round(length * 1000) / 1000).toFixed(3);
+  const result = await run(ffmpegPath, [
+    '-y', '-hide_banner',
+    '-i', inputPath,
+    '-t', seconds,
+    '-vn',
+    '-c:a', 'libmp3lame',
+    '-q:a', '4',
+    outputPath,
+  ]);
+  if (result.code !== 0 || !fs.existsSync(outputPath)) {
+    throw new Error('Could not cut that section.');
+  }
+  const probe = await probeFile(ffprobePath, outputPath);
+  if (!probe.hasAudio || !(probe.durationMs > 0)) {
+    throw new Error('Cut sound was empty.');
+  }
+  return probe;
+}
+
 module.exports = {
   PICKER_EXTENSIONS,
   importDialogFilters,
@@ -195,4 +230,6 @@ module.exports = {
   measureVolume,
   convertFileToMp3,
   trimMainSound,
+  readRmsMetadata,
+  cutExact,
 };
