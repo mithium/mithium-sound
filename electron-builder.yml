@@ -5,6 +5,8 @@ directories:
 files:
   - src/**/*
   - package.json
+  # ffprobe-static ships every platform. The app uses resources/bin/ffprobe.exe.
+  - "!node_modules/ffprobe-static/**"
 asarUnpack:
   - node_modules/sql.js/dist/**
   - node_modules/@snazzah/davey-win32-x64-msvc/**
